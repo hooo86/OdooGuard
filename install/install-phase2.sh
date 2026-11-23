@@ -53,6 +53,14 @@ for t in veeam offline; do
     fi
 done
 
+if [[ ! -s "$ETC/web/secret" ]]; then
+    # Clé de signature des sessions : le service web (cloisonné, /etc en lecture
+    # seule) ne peut pas la créer lui-même.
+    (umask 077; openssl rand -hex 32 > "$ETC/web/secret")
+    chown odooguard:odooguard "$ETC/web/secret"
+    echo "  clé de session créée : $ETC/web/secret"
+fi
+
 step "4. Certificat HTTPS auto-signé (10 ans)"
 if [[ ! -f "$ETC/web/odooguard.crt" ]]; then
     openssl req -x509 -newkey rsa:3072 -sha256 -days 3650 -nodes \

@@ -116,3 +116,29 @@ def test_password_hash():
 
 def test_healthz_no_auth(client):
     assert client.get("/healthz").json()["web"] == "ok"
+
+
+def test_secret_unwritable_gives_clear_error(tmp_path):
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    import os
+    os.chmod(ro, 0o500)
+    if os.geteuid() == 0:
+        pytest.skip("root contourne les droits")
+    with pytest.raises(RuntimeError, match="install-phase2.sh"):
+        auth.load_secret(str(ro / "secret"))
+
+
+def test_rpo_never_when_no_backup(cfg, monkeypatch):
+    from odooguard import status as status_mod
+    from odooguard.util import OdooGuardError
+    cfg.destinations.clear()
+    monkeypatch.setattr(status_mod, "wal_state", lambda cfg, query_source=True: {
+        "ok": False, "lag_seconds": None, "pending": None, "slot_wal_status": None})
+
+    def boom(self, repo_path=None):
+        raise OdooGuardError("missing stanza path")
+    monkeypatch.setattr(status_mod.PgBackRest, "info", boom)
+    monkeypatch.setattr(status_mod.Restic, "snapshots", lambda self: [])
+    st = status_mod.compute(cfg, History(cfg.history_db))
+    assert st["rpo"]["db_seconds"] is None

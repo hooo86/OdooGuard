@@ -118,11 +118,19 @@ def load_secret(path: str) -> bytes:
                 return key
     except FileNotFoundError:
         pass
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     key = secrets.token_hex(32).encode()
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(key)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(key)
+    except OSError as exc:
+        # Le service web est cloisonné (/etc/odooguard en lecture seule) : la clé
+        # doit être créée par install-phase2.sh.
+        raise RuntimeError(
+            f"clé de session {path} absente et impossible à créer ({exc}) : "
+            "relancer install/install-phase2.sh, ou : openssl rand -hex 32 > "
+            f"{path} ; chown odooguard: {path} ; chmod 600 {path}") from None
     return key
 
 

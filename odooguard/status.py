@@ -121,7 +121,7 @@ def compute(cfg: Config, history: History, *, query_source: bool = True) -> dict
         lastrun = history.last(f"copy:{dest.name}")
         age = now - ok["ended_at"] if ok else None
         level = _level_for_age(age, cfg.max_age["copy"])
-        msg = "ok"
+        msg = "ok" if ok else "aucune copie réussie pour l'instant"
         if lastrun and lastrun["status"] == "failed":
             level = "critical" if lastrun.get("category") in ("io", "mount", "space") else max(
                 level, "warning", key=LEVELS.get)
@@ -186,7 +186,8 @@ def compute(cfg: Config, history: History, *, query_source: bool = True) -> dict
                 c["level"] = "warning"
 
     # Perte de données maximale actuelle, par nature de données
-    rpo_db = min(x for x in (lag, db_age, 10**9) if x is not None)
+    known = [x for x in (lag, db_age) if x is not None]
+    rpo_db = min(known) if known else None  # « jamais » tant qu'aucune sauvegarde n'existe
     rpo = {"db_seconds": rpo_db, "files_seconds": files_age}
     overall = max((c["level"] for c in comps), key=LEVELS.get, default="unknown")
     return {"generated_at": now, "site": cfg.site, "overall": overall, "rpo": rpo,
