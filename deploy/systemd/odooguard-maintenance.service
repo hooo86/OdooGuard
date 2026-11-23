@@ -1,0 +1,13 @@
+[Unit]
+Description=OdooGuard - rétention restic (forget --prune)
+OnFailure=odooguard-notify@%n.service
+
+[Service]
+Type=oneshot
+User=odooguard
+Group=odooguard
+RuntimeDirectory=odooguard
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/local/bin/odooguard maintenance
+Nice=15
+IOSchedulingClass=idle

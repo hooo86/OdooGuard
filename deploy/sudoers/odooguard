@@ -1,0 +1,3 @@
+# /etc/sudoers.d/odooguard  (root:root 440) - droits minimaux du compte de service
+# Relancer la réception des WAL après une restauration de l'instance de production.
+odooguard ALL=(root) NOPASSWD: /usr/bin/systemctl restart odooguard-walreceiver.service

@@ -1,0 +1,17 @@
+# Versement des WAL reçus dans le dépôt pgBackRest (archive-push local).
+[Unit]
+Description=OdooGuard - versement des WAL dans le dépôt pgBackRest
+After=odooguard-walreceiver.service local-fs.target
+OnFailure=odooguard-notify@%n.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=odooguard
+Group=odooguard
+ExecStart=/usr/local/bin/odooguard wal-ingest
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

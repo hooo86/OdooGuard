@@ -1,0 +1,10 @@
+[Unit]
+Description=OdooGuard - sauvegarde différentielle nocturne (lundi-samedi 01:00)
+
+[Timer]
+OnCalendar=Mon..Sat *-*-* 01:00:00
+Persistent=true
+Unit=odooguard-backup-db@diff.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,15 @@
+# Contrôle d'état toutes les 5 min : écrit status.json, mesure la perte de
+# données (RPO) et alerte si un composant est en avertissement / critique.
+[Unit]
+Description=OdooGuard - contrôle d'état et mesure RPO
+
+[Service]
+Type=oneshot
+User=odooguard
+Group=odooguard
+RuntimeDirectory=odooguard
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/local/bin/odooguard status --check --record
+# 1 = avertissement, 2 = critique : l'alerte est envoyée par la commande elle-même
+SuccessExitStatus=1 2
+TimeoutStartSec=4min

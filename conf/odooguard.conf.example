@@ -1,0 +1,96 @@
+# =============================================================================
+# /etc/odooguard/odooguard.conf  -  propriétaire odooguard, droits 600
+# Modèle versionné : AUCUN secret ici. Les secrets sont dans des fichiers à part
+# (restic.pass, pgpass, phrase de chiffrement pgBackRest) ou dans l'environnement
+# (ODOOGUARD_<SECTION>_<CLE>).
+# Les valeurs marquées [À VÉRIFIER] doivent être confirmées sur server01.
+# =============================================================================
+
+[general]
+site = LNHC
+state_dir = /var/lib/odooguard
+log_dir = /var/log/odooguard
+lock_dir = /run/odooguard
+# Zone de travail des restaurations (instance temporaire) : prévoir la taille
+# de la plus grosse base restaurée + marge.
+staging_dir = /srv/odooguard/staging
+# Espace libre minimal exigé sur le disque des dépôts avant toute sauvegarde
+min_free_gb = 50
+
+[odoo]
+host = 192.168.8.80
+ssh_user = root
+ssh_key = /etc/odooguard/ssh/id_agent
+# [À VÉRIFIER] : psql -V et pg_lsclusters sur server01
+pg_version = 15
+pg_cluster = main
+odoo_service = odoo
+odoo_conf = /etc/odoo/odoo.conf
+odoo_url = http://192.168.8.80:8069
+filestore_path = /var/lib/odoo/.local/share/Odoo/filestore
+databases = LNHC_Prod_2025, LNHC_08_07_26
+# Répertoires sauvegardés par rsync (pull, lecture seule) puis restic.
+# [À VÉRIFIER] : chemin des modules additionnels (addons_path dans odoo.conf).
+file_sources =
+    /var/lib/odoo/.local/share/Odoo/filestore,
+    /etc/odoo,
+    /opt/odoo/custom-addons,
+    /etc/postgresql,
+    /etc/pgbackrest,
+    /etc/systemd/system,
+    /etc/nginx,
+    /var/lib/odooguard-export
+rsync_excludes = sessions/, *.pyc, __pycache__/
+# Limite de débit rsync de 8h à 18h (impact Odoo). Vide = pas de limite.
+rsync_bwlimit_day = 40M
+
+[pgbackrest]
+stanza = lnhc
+config = /etc/pgbackrest/pgbackrest.conf
+ingest_config = /etc/pgbackrest/odooguard-ingest.conf
+repo_path = /srv/odooguard/pgbackrest
+wal_spool = /srv/odooguard/wal-spool
+pg_shadow = /var/lib/odooguard/pgshadow
+wal_keep_local = 256
+wal_receiver_unit = odooguard-walreceiver.service
+pg_bin_dir = /usr/lib/postgresql/15/bin
+
+[restic]
+repository = /srv/odooguard/restic
+password_file = /etc/odooguard/restic.pass
+mirror_dir = /srv/odooguard/mirror
+keep_hourly = 48
+keep_daily = 14
+keep_weekly = 8
+keep_monthly = 12
+
+[thresholds]
+# Âge maximal (secondes) avant alerte critique
+wal_max_lag = 600
+db_any_max_age = 93600
+db_full_max_age = 691200
+files_max_age = 3600
+copy_max_age = 10800
+
+# ----------------------------------------------------------------- cibles
+# VM de test isolée (restaurations de contrôle, phase 3)
+[target:testvm]
+host = 192.168.8.82
+ssh_user = root
+ssh_key = /etc/odooguard/ssh/id_agent
+pg_version = 15
+odoo_url = http://192.168.8.82:8069
+is_production = no
+
+# ----------------------------------------------------------------- copies NAS
+[destination:nas1]
+# NAS principal 192.168.8.30, partage CIFS « odoo » (cf. /etc/fstab)
+mountpoint = /mnt/nas-odoo
+path = /mnt/nas-odoo/odooguard
+min_free_gb = 500
+
+[destination:nas2]
+# NAS secondaire 192.168.3.19, partage « Backups »
+mountpoint = /mnt/nas-backups
+path = /mnt/nas-backups/odooguard
+min_free_gb = 500

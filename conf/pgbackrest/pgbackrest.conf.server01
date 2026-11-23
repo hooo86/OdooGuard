@@ -1,0 +1,17 @@
+# =============================================================================
+# /etc/pgbackrest/pgbackrest.conf  sur server01 et la VM de test
+# (root:postgres 640). Aucun secret : la phrase de chiffrement reste sur OdooGuard.
+#
+# * Sauvegarde : lu par « pgbackrest ... backup:remote » lancé par OdooGuard.
+# * Restauration : server01 lit le dépôt d'OdooGuard via le compte en lecture
+#   seule pgbr-reader (clé ~postgres/.ssh/id_ed25519).
+# =============================================================================
+[global]
+repo1-host=192.168.8.81
+repo1-host-user=pgbr-reader
+repo1-host-config=/etc/pgbackrest/reader.conf
+log-path=/var/log/pgbackrest
+log-level-file=info
+[lnhc]
+pg1-path=/var/lib/postgresql/15/main
+pg1-port=5432

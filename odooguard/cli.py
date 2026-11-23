@@ -1,0 +1,482 @@
+"""Interface en ligne de commande : ``odooguard backup|restore|list|verify|status``.
+
+Codes de retour : 0 succès / état OK, 1 avertissement, 2 échec / critique,
+3 erreur d'utilisation ou de configuration.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import logging
+import os
+import pwd
+import sys
+import time
+
+from odooguard import __version__, notify
+from odooguard import config as config_mod
+from odooguard import dest as dest_mod
+from odooguard import status as status_mod
+from odooguard.audit import Auditor, confirm_destructive
+from odooguard.files import Restic, pull_mirror
+from odooguard.history import History
+from odooguard.pg import PgBackRest, WalIngest
+from odooguard.restore import Restorer
+from odooguard.util import (OdooGuardError, check_free_space, file_lock, fmt_age,
+                            fmt_size, fmt_time, io_probe, parse_time, run)
+
+log = logging.getLogger("odooguard")
+
+
+# ====================================================================== outils
+class Ctx:
+    def __init__(self, args: argparse.Namespace):
+        self.args = args
+        self.cfg = config_mod.load(args.config)
+        os.makedirs(self.cfg.state_dir, exist_ok=True)
+        self.history = History(self.cfg.history_db)
+        self.auditor = Auditor(self.history, self.cfg.audit_log)
+
+
+def tracked(ctx: Ctx, component: str, kind: str, func, *, alert: bool = True):
+    """Exécute ``func`` en traçant début/fin dans l'historique.
+
+    En cas d'échec : statut « failed » avec sa catégorie (io, space, mount...),
+    alerte immédiate et code retour non nul (=> OnFailure systemd).
+    """
+    ctx.history.mark_interrupted()
+    run_id = ctx.history.start(component, kind)
+    t0 = time.monotonic()
+    try:
+        result = func() or {}
+    except Exception as exc:  # noqa: BLE001 - on veut tout tracer
+        cat = getattr(exc, "category", "error")
+        ctx.history.finish(run_id, "failed", message=str(exc), category=cat)
+        if alert:
+            notify.send("critical", f"OdooGuard : échec {component} ({kind}) [{cat}]", str(exc)[:1500])
+        raise
+    ctx.history.finish(run_id, "success", size=result.get("size"), added=result.get("added"),
+                       label=result.get("label"), message=result.get("message", ""),
+                       details=result)
+    log.info("%s (%s) terminé en %.0f s", component, kind, time.monotonic() - t0)
+    return result
+
+
+def preflight_local(ctx: Ctx) -> None:
+    cfg = ctx.cfg
+    check_free_space(cfg.repo_path, cfg.min_free_gb, "dépôt pgBackRest")
+    io_probe(cfg.repo_path)
+
+
+def out(ctx: Ctx, data, human: str) -> None:
+    if getattr(ctx.args, "json", False):
+        print(json.dumps(data, indent=2, default=str, ensure_ascii=False))
+    else:
+        print(human)
+
+
+# ====================================================================== backup
+def cmd_backup(ctx: Ctx) -> int:
+    a = ctx.args
+    cfg = ctx.cfg
+    if a.what == "db":
+        def job():
+            preflight_local(ctx)
+            pg = PgBackRest(cfg)
+            pg.backup(a.type)
+            last = pg.info().last()
+            return {"label": last.label, "size": last.size, "added": last.repo_delta,
+                    "duration": last.duration}
+        with file_lock(cfg.lock_dir, "db", wait=a.wait):
+            r = tracked(ctx, "db", a.type, job)
+        print(f"sauvegarde base {a.type} OK : {r['label']} ({fmt_size(r['added'])} ajoutés)")
+    elif a.what == "files":
+        def job():
+            check_free_space(cfg.mirror_dir, cfg.min_free_gb, "miroir")
+            io_probe(cfg.restic_repo)
+            from odooguard.remote import Agent
+            Agent(cfg.source).call("export", timeout=600)  # pip freeze, paquets, versions
+            stats = pull_mirror(cfg)
+            summ = Restic(cfg).backup(cfg.mirror_dir, host=cfg.source.host, tags=["files"])
+            return {"label": summ["snapshot_id"][:8], "size": summ.get("total_bytes_processed"),
+                    "added": summ.get("data_added"), "rsync": stats}
+        with file_lock(cfg.lock_dir, "files", wait=a.wait):
+            r = tracked(ctx, "files", "snapshot", job)
+        print(f"sauvegarde fichiers OK : instantané {r['label']} ({fmt_size(r['added'])} ajoutés)")
+    elif a.what == "copy":
+        names = [a.dest] if a.dest else [d.name for d in cfg.destinations.values() if d.enabled]
+        failures = 0
+        for name in names:
+            dest = cfg.destinations.get(name)
+            if not dest:
+                raise OdooGuardError(f"destination inconnue : {name}", "usage")
+
+            def job(dest=dest):
+                probe = dest_mod.preflight(dest)
+                # Sous les deux verrous : aucune sauvegarde ne modifie les dépôts pendant la copie
+                with file_lock(cfg.lock_dir, "db", wait=3600), file_lock(cfg.lock_dir, "files", wait=3600):
+                    pgr = dest_mod.copy_pgbackrest(cfg, dest)
+                    rr = dest_mod.copy_restic(cfg, dest)
+                return {"label": pgr["label"], "message": "copie vérifiée", **probe, **rr}
+            try:
+                tracked(ctx, f"copy:{name}", "copy", job)
+                print(f"copie vers {name} OK")
+            except OdooGuardError as exc:
+                failures += 1
+                print(f"copie vers {name} ÉCHEC : {exc}", file=sys.stderr)
+        return 2 if failures else 0
+    return 0
+
+
+# ====================================================================== WAL
+def cmd_wal_ingest(ctx: Ctx) -> int:
+    ing = WalIngest(ctx.cfg)
+    if ctx.args.refresh_shadow:
+        ing.refresh_shadow()
+        print("pg_control rafraîchi")
+        return 0
+    if ctx.args.once:
+        print(f"{ing.run_once()} fichier(s) versé(s)")
+        return 0
+    if ctx.args.finalize_partial:
+        from odooguard.pg import spool_state
+        partial = spool_state(ctx.cfg)["partial"] or "-"
+        confirm_destructive(
+            action="finalisation du segment WAL en cours", expected=partial,
+            force=ctx.args.force, confirm=ctx.args.confirm,
+            description=("SINISTRE : à utiliser seulement si server01 est perdu ET le service "
+                         "odooguard-walreceiver arrêté. Le segment en cours sera versé dans le "
+                         "dépôt sous son nom définitif (dernières secondes de données)."))
+        ctx.auditor.record("wal-finalize-partial", partial, "started")
+        name = ing.finalize_partial()
+        ctx.auditor.record("wal-finalize-partial", partial, "success", segment=name)
+        print(f"segment {name} versé dans le dépôt")
+        return 0
+    last_alert = [0.0]
+
+    def on_error(exc):
+        if time.time() - last_alert[0] > 900:  # au plus une alerte / 15 min
+            notify.send("critical", "OdooGuard : versement des WAL en échec", str(exc)[:1500])
+            last_alert[0] = time.time()
+    ing.loop(on_error=on_error)
+    return 0
+
+
+# ====================================================================== list
+def cmd_list(ctx: Ctx) -> int:
+    cfg = ctx.cfg
+    data: dict = {}
+    lines: list[str] = []
+    if ctx.args.what in ("db", "all"):
+        info = PgBackRest(cfg).info()
+        data["db"] = [b.__dict__ for b in info.backups]
+        lines.append("== Base (pgBackRest, stanza %s) ==" % cfg.stanza)
+        lines.append(f"{'étiquette':<36} {'type':<5} {'début':<19} {'durée':>7} "
+                     f"{'taille':>10} {'ajouté':>10}")
+        for b in info.backups:
+            lines.append(f"{b.label:<36} {b.type:<5} {fmt_time(b.start):<19} "
+                         f"{fmt_age(b.duration):>7} {fmt_size(b.size):>10} {fmt_size(b.repo_delta):>10}")
+        if info.backups:
+            lines.append(f"Restauration à un instant précis possible depuis "
+                         f"{fmt_time(info.backups[0].stop)} jusqu'au dernier WAL reçu "
+                         f"({info.wal_max}).")
+    if ctx.args.what in ("files", "all"):
+        snaps = Restic(cfg).snapshots()
+        data["files"] = snaps
+        lines.append("\n== Fichiers (restic) ==")
+        for s in snaps[-ctx.args.limit:]:
+            summ = s.get("summary") or {}
+            lines.append(f"{s['short_id']}  {fmt_time(dt.datetime.fromisoformat(s['time'].replace('Z', '+00:00')))}"
+                         f"  {fmt_size(summ.get('total_bytes_processed'))}"
+                         f"  +{fmt_size(summ.get('data_added'))}")
+    if ctx.args.what in ("runs", "all"):
+        runs = ctx.history.recent(ctx.args.limit)
+        data["runs"] = runs
+        lines.append("\n== Dernières exécutions ==")
+        for r in runs:
+            dur = (r["ended_at"] or time.time()) - r["started_at"]
+            lines.append(f"{fmt_time(r['started_at'])}  {r['component']:<14} {r['kind']:<8} "
+                         f"{r['status']:<8} {fmt_age(dur):>8}  {(r['message'] or '')[:60]}")
+    out(ctx, data, "\n".join(lines))
+    return 0
+
+
+# ====================================================================== verify
+def cmd_verify(ctx: Ctx) -> int:
+    cfg = ctx.cfg
+    a = ctx.args
+
+    def job():
+        res = {}
+        pg = PgBackRest(cfg)
+        res["pgbackrest_check"] = "ok" if pg.check() else ""
+        if a.level == "full":
+            pg.verify()
+            res["pgbackrest_verify"] = "ok"
+        Restic(cfg).check(read_data_subset="100%" if a.level == "full" else "2%")
+        res["restic_check"] = "ok"
+        for d in cfg.destinations.values():
+            if not d.enabled or (a.dest and d.name != a.dest):
+                continue
+            dest_mod.preflight(d)
+            if a.level == "full":
+                pg.verify(repo_path=os.path.join(d.path, "pgbackrest"))
+                dest_mod.restic_for(cfg, d).check(read_data_subset="10%")
+            res[f"dest:{d.name}"] = "ok"
+        return {"message": json.dumps(res), **res}
+    with file_lock(cfg.lock_dir, "verify", wait=0):
+        r = tracked(ctx, "verify", a.level, job)
+    out(ctx, r, "\n".join(f"{k} : {v}" for k, v in r.items() if k != "message"))
+    return 0
+
+
+# ====================================================================== status
+def cmd_status(ctx: Ctx) -> int:
+    cfg = ctx.cfg
+    if ctx.args.rpo_report:
+        days = float(ctx.args.rpo_report.rstrip("dj"))
+        rep = status_mod.rpo_report(ctx.history, days)
+        human = (f"Perte de données maximale mesurée sur {days:g} j :\n"
+                 f"  base     : {fmt_age(rep['db_seconds']['max'])} "
+                 f"({rep['db_seconds']['samples']} mesures)\n"
+                 f"  fichiers : {fmt_age(rep['files_seconds']['max'])} "
+                 f"({rep['files_seconds']['samples']} mesures)")
+        out(ctx, rep, human)
+        return 0
+    st = status_mod.compute(cfg, ctx.history, query_source=not ctx.args.no_remote)
+    if ctx.args.record:
+        status_mod.record(cfg, ctx.history, st)
+    lines = [f"OdooGuard {cfg.site} - état global : {st['overall'].upper()}",
+             f"Perte de données max. actuelle : base {fmt_age(st['rpo']['db_seconds'])}, "
+             f"fichiers {fmt_age(st['rpo']['files_seconds'])}", ""]
+    for c in st["components"]:
+        extra = []
+        if "age" in c:
+            extra.append(f"âge {fmt_age(c['age'])}")
+        if c.get("size") is not None:
+            extra.append(f"taille {fmt_size(c['size'])}")
+        if c.get("duration") is not None:
+            extra.append(f"durée {fmt_age(c['duration'])}")
+        lines.append(f"  [{c['level'].upper():^8}] {c['name']:<14} {', '.join(extra)}  {c.get('message', '')}")
+    out(ctx, st, "\n".join(lines))
+    if ctx.args.check:
+        if st["overall"] != "ok":
+            bad = [f"{c['name']}: {c.get('message', '')}" for c in st["components"] if c["level"] != "ok"]
+            notify.send(st["overall"], f"OdooGuard : état {st['overall']}", "; ".join(bad)[:1500])
+        return status_mod.LEVELS.get(st["overall"], 2)
+    return 0
+
+
+# ====================================================================== restore
+def cmd_restore(ctx: Ctx) -> int:
+    a = ctx.args
+    cfg = ctx.cfg
+    when = parse_time(a.time) if getattr(a, "time", None) else None
+    r = Restorer(cfg, ctx.auditor)
+    with file_lock(cfg.lock_dir, "restore", wait=0):
+        if a.what == "db":
+            neutralize = {"yes": True, "no": False, "auto": None}[a.neutralize]
+            rep = tracked(ctx, "restore", "db", lambda: r.restore_db(
+                db=a.db, as_name=a.as_name, when=when, target_name=a.target,
+                neutralize=neutralize, with_filestore=not a.no_filestore, force=a.force,
+                confirm=a.confirm, keep_staging=a.keep_staging), alert=False)
+        elif a.what == "cluster":
+            rep = tracked(ctx, "restore", "cluster", lambda: r.restore_cluster(
+                target_name=a.target, when=when, force=a.force, confirm=a.confirm), alert=False)
+            if cfg.target(a.target).is_production:
+                with file_lock(cfg.lock_dir, "db", wait=3600):
+                    tracked(ctx, "db", "full", lambda: (PgBackRest(cfg).backup("full"), {})[1])
+        elif a.what == "files":
+            if a.push:
+                rep = r.push_files(target_name=a.target, when=when, paths=a.path,
+                                   force=a.force, confirm=a.confirm)
+            else:
+                outdir = a.out or os.path.join(cfg.staging_dir, "extraction-" + time.strftime("%Y%m%d-%H%M%S"))
+                rep = r.extract_files(when=when, paths=a.path, out_dir=outdir)
+        elif a.what == "full":
+            # Reprise complète : instance + configuration + modules + filestore.
+            confirm_destructive(action="reprise complète", expected=a.target, force=a.force,
+                                confirm=a.confirm, description=(
+                                    f"Reprise complète sur {a.target} : instance PostgreSQL, "
+                                    f"/etc/odoo, modules et filestore seront remplacés."))
+            rep = {"cluster": r.restore_cluster(target_name=a.target, when=when, force=True,
+                                                confirm=a.target)}
+            t = cfg.target(a.target)
+            paths = [p for p in cfg.file_sources if not p.startswith("/var/lib/odooguard-export")]
+            rep["files"] = r.push_files(target_name=a.target, when=when, paths=paths,
+                                        force=True, confirm=a.target)
+            from odooguard.remote import Agent
+            Agent(t).call("odoo-start", timeout=300)
+            rep["odoo"] = "démarré"
+        else:  # pragma: no cover
+            raise OdooGuardError("type de restauration inconnu", "usage")
+    out(ctx, rep, json.dumps(rep, indent=2, ensure_ascii=False, default=str))
+    return 0
+
+
+# ====================================================================== maintenance
+def cmd_maintenance(ctx: Ctx) -> int:
+    cfg = ctx.cfg
+
+    def job():
+        with file_lock(cfg.lock_dir, "files", wait=3600):
+            Restic(cfg).forget(cfg.restic_keep, prune=True)
+            for d in cfg.destinations.values():
+                if d.enabled:
+                    try:
+                        dest_mod.preflight(d)
+                        dest_mod.restic_for(cfg, d).forget(cfg.restic_keep, prune=True)
+                    except OdooGuardError as exc:
+                        log.warning("maintenance %s : %s", d.name, exc)
+        return {"message": "restic forget --prune effectué"}
+    tracked(ctx, "maintenance", "weekly", job)
+    return 0
+
+
+def cmd_notify_failure(ctx: Ctx) -> int:
+    """Appelé par OnFailure= des unités systemd : alerte avec la fin du journal."""
+    unit = ctx.args.unit
+    res = run(["journalctl", "-u", unit, "-n", "25", "--no-pager", "-o", "cat"], check=False)
+    notify.send("critical", f"OdooGuard : l'unité {unit} a échoué", res.stdout[-3000:])
+    return 0
+
+
+def cmd_init(ctx: Ctx) -> int:
+    """Initialisation idempotente des dépôts (après l'installation)."""
+    cfg = ctx.cfg
+    for d in (cfg.repo_path, cfg.wal_spool, cfg.mirror_dir, cfg.staging_dir, cfg.pg_shadow):
+        os.makedirs(d, exist_ok=True)
+    WalIngest(cfg).refresh_shadow()
+    print("pg_control récupéré depuis server01")
+    if not os.path.exists(os.path.join(cfg.repo_path, "backup", cfg.stanza, "backup.info")):
+        PgBackRest(cfg).stanza_create()
+        print(f"stanza pgBackRest « {cfg.stanza} » créée")
+    if not os.path.exists(os.path.join(cfg.restic_repo, "config")):
+        Restic(cfg).init()
+        print(f"dépôt restic initialisé : {cfg.restic_repo}")
+    print("Initialisation terminée.")
+    return 0
+
+
+# ====================================================================== parseur
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="odooguard", description="Sauvegarde / restauration Odoo du LNHC")
+    p.add_argument("--config", help="fichier de configuration (défaut /etc/odooguard/odooguard.conf)")
+    p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("--version", action="version", version=f"odooguard {__version__}")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    b = sub.add_parser("backup", help="lancer une sauvegarde")
+    bs = b.add_subparsers(dest="what", required=True)
+    bdb = bs.add_parser("db", help="base de données (pgBackRest)")
+    bdb.add_argument("--type", choices=["full", "diff", "incr"], default="incr")
+    bfi = bs.add_parser("files", help="filestore, modules, configuration (rsync + restic)")
+    bco = bs.add_parser("copy", help="copie des dépôts vers les NAS")
+    bco.add_argument("--dest", help="une seule destination")
+    for x in (bdb, bfi, bco):
+        x.add_argument("--wait", type=float, default=0,
+                       help="attendre le verrou N secondes si une sauvegarde est en cours")
+    b.set_defaults(func=cmd_backup)
+
+    w = sub.add_parser("wal-ingest", help="verser les WAL reçus dans le dépôt (service)")
+    w.add_argument("--once", action="store_true", help="un seul passage puis sortie")
+    w.add_argument("--refresh-shadow", action="store_true",
+                   help="re-télécharger pg_control depuis server01")
+    w.add_argument("--finalize-partial", action="store_true",
+                   help="SINISTRE : verser le segment en cours (server01 perdu)")
+    w.add_argument("--force", action="store_true")
+    w.add_argument("--confirm")
+    w.set_defaults(func=cmd_wal_ingest)
+
+    l = sub.add_parser("list", help="lister les sauvegardes")
+    l.add_argument("what", nargs="?", choices=["db", "files", "runs", "all"], default="all")
+    l.add_argument("--limit", type=int, default=30)
+    l.add_argument("--json", action="store_true")
+    l.set_defaults(func=cmd_list)
+
+    v = sub.add_parser("verify", help="vérifier l'intégrité des sauvegardes")
+    v.add_argument("--level", choices=["quick", "full"], default="quick",
+                   help="quick : contrôles rapides ; full : relecture complète (long)")
+    v.add_argument("--dest", help="limiter à une destination")
+    v.add_argument("--json", action="store_true")
+    v.set_defaults(func=cmd_verify)
+
+    s = sub.add_parser("status", help="état des sauvegardes")
+    s.add_argument("--json", action="store_true")
+    s.add_argument("--check", action="store_true",
+                   help="code retour 0/1/2 (ok/avertissement/critique) et alerte si besoin")
+    s.add_argument("--record", action="store_true", help="écrire status.json et les mesures RPO")
+    s.add_argument("--no-remote", action="store_true", help="ne pas interroger server01")
+    s.add_argument("--rpo-report", metavar="7d", help="perte de données max. mesurée sur N jours")
+    s.set_defaults(func=cmd_status)
+
+    r = sub.add_parser("restore", help="restaurer")
+    rs = r.add_subparsers(dest="what", required=True)
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--time", help="instant visé : '2026-11-22 14:30', 'hier 14:30', '-2h'. "
+                                       "Absent = le plus récent possible")
+    common.add_argument("--force", action="store_true", help="autoriser une opération destructive")
+    common.add_argument("--confirm", help="confirmation non interactive (nom exact attendu)")
+    common.add_argument("--json", action="store_true")
+    rdb = rs.add_parser("db", parents=[common], help="une seule base (+ son filestore)")
+    rdb.add_argument("--db", required=True, help="base source, ex. LNHC_Prod_2025")
+    rdb.add_argument("--as", dest="as_name", help="nom de la base restaurée (défaut : identique)")
+    rdb.add_argument("--target", default="odoo", help="cible : odoo (server01) ou [target:<nom>]")
+    rdb.add_argument("--neutralize", choices=["auto", "yes", "no"], default="auto",
+                     help="auto : neutralisée sauf si restaurée sous son nom en production")
+    rdb.add_argument("--no-filestore", action="store_true")
+    rdb.add_argument("--keep-staging", action="store_true", help="garder la zone de travail (diagnostic)")
+    rcl = rs.add_parser("cluster", parents=[common], help="toute l'instance PostgreSQL de la cible")
+    rcl.add_argument("--target", required=True)
+    rfi = rs.add_parser("files", parents=[common], help="fichiers depuis restic")
+    rfi.add_argument("--path", action="append", default=[], help="chemin d'origine sur server01")
+    rfi.add_argument("--out", help="répertoire d'extraction local")
+    rfi.add_argument("--push", action="store_true", help="réinstaller sur la cible au lieu d'extraire")
+    rfi.add_argument("--target", default="odoo")
+    rfu = rs.add_parser("full", parents=[common], help="reprise complète (serveur Debian neuf)")
+    rfu.add_argument("--target", required=True)
+    r.set_defaults(func=cmd_restore)
+
+    m = sub.add_parser("maintenance", help="rétention restic (forget --prune)")
+    m.set_defaults(func=cmd_maintenance)
+    nf = sub.add_parser("notify-failure", help="(systemd OnFailure) alerter sur l'échec d'une unité")
+    nf.add_argument("unit")
+    nf.set_defaults(func=cmd_notify_failure)
+    i = sub.add_parser("init", help="initialiser les dépôts (une fois, après installation)")
+    i.set_defaults(func=cmd_init)
+    return p
+
+
+def _drop_privileges_if_root(run_as: str) -> None:
+    """Lancé en root (sudo) : on se ré-exécute sous le compte de service."""
+    if os.geteuid() != 0 or os.environ.get("ODOOGUARD_ALLOW_ROOT") == "1":
+        return
+    try:
+        pwd.getpwnam(run_as)
+    except KeyError:
+        return
+    os.execvp("runuser", ["runuser", "-u", run_as, "--", sys.executable, "-m", "odooguard",
+                          *sys.argv[1:]])
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
+    if argv is None:
+        _drop_privileges_if_root("odooguard")
+    try:
+        ctx = Ctx(args)
+        return int(args.func(ctx) or 0)
+    except config_mod.ConfigError as exc:
+        print(f"configuration : {exc}", file=sys.stderr)
+        return 3
+    except OdooGuardError as exc:
+        print(f"ERREUR [{exc.category}] : {exc}", file=sys.stderr)
+        return 3 if exc.category == "usage" else 2
+    except KeyboardInterrupt:
+        print("interrompu", file=sys.stderr)
+        return 130

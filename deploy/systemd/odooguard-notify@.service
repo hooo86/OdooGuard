@@ -1,0 +1,10 @@
+# Déclenché par OnFailure= : alerte immédiate sur l'échec d'une unité OdooGuard.
+[Unit]
+Description=OdooGuard - alerte sur échec de %i
+
+[Service]
+Type=oneshot
+User=odooguard
+Group=odooguard
+SupplementaryGroups=systemd-journal
+ExecStart=/usr/local/bin/odooguard notify-failure %i

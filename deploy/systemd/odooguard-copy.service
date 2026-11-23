@@ -1,0 +1,16 @@
+[Unit]
+Description=OdooGuard - copie des dépôts vers les NAS (vérifiée)
+After=network-online.target remote-fs.target
+Wants=network-online.target
+OnFailure=odooguard-notify@%n.service
+
+[Service]
+Type=oneshot
+User=odooguard
+Group=odooguard
+RuntimeDirectory=odooguard
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/local/bin/odooguard backup copy
+Nice=15
+IOSchedulingClass=idle
+TimeoutStartSec=10h

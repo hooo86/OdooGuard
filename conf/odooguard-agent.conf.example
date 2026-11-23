@@ -1,0 +1,11 @@
+# /etc/odooguard-agent.conf  sur server01 et la VM de test (root:root 644, sans secret)
+ODOO_USER=odoo
+ODOO_DB_USER=odoo
+ODOO_SERVICE=odoo
+ODOO_CONF=/etc/odoo/odoo.conf
+ODOO_BIN=/usr/bin/odoo
+FILESTORE=/var/lib/odoo/.local/share/Odoo/filestore
+# Chemins que « odooguard restore files --push » / « restore full » peuvent
+# réinstaller, avec propriétaire:groupe à appliquer. [À VÉRIFIER : modules]
+IMPORT_PATHS="/etc/odoo:odoo:odoo /opt/odoo/custom-addons:odoo:odoo /var/lib/odoo/.local/share/Odoo/filestore:odoo:odoo"
+RECOVERY_TIMEOUT=21600

@@ -1,0 +1,246 @@
+#!/bin/bash
+# =============================================================================
+# odooguard-agent - agent à liste blanche exécuté sur les serveurs Odoo
+#                   (server01 et VM de test), en root, via SSH :
+#
+#   /root/.ssh/authorized_keys :
+#     restrict,from="<IP OdooGuard>",command="/usr/local/sbin/odooguard-agent" ssh-ed25519 ... odooguard
+#   /etc/ssh/sshd_config.d/odooguard.conf :
+#     PermitRootLogin forced-commands-only
+#
+# Chaque appel est journalisé (journal système, étiquette odooguard-agent).
+# Les arguments sont validés : uniquement [A-Za-z0-9_.:+/=-], aucun shell.
+# Rien n'est jamais supprimé : ce qui est remplacé est d'abord renommé
+# « <nom>_avant_restauration_<AAAAMMJJ-HHMMSS> ».
+#
+# Verbes :
+#   rsync --server --sender ...   lecture seule (rrsync -ro), sauvegarde des fichiers
+#   pg-control VER CLUSTER         contenu binaire de global/pg_control
+#   wal-status VER CLUSTER         état du flux WAL vers OdooGuard (JSON)
+#   export                         met à jour /var/lib/odooguard-export (versions, pip...)
+#   db-exists NOM                  {"exists": true|false}
+#   db-import NOM [--replace]      pg_restore depuis l'entrée standard
+#   filestore-import NOM [--replace]  tar depuis l'entrée standard
+#   fs-import CHEMIN               tar depuis l'entrée standard (chemins autorisés)
+#   neutralize NOM                 odoo neutralize
+#   db-report NOM                  comptages de contrôle + lisibilité des pièces jointes (JSON)
+#   odoo-start | odoo-stop | odoo-status
+#   pg-restore-cluster VER CLUSTER STANZA HORODATAGE|latest
+#   create-slot VER CLUSTER        (re)crée le slot de réplication « odooguard »
+# =============================================================================
+set -euo pipefail
+umask 027
+
+CONF=/etc/odooguard-agent.conf
+ODOO_USER=odoo
+ODOO_DB_USER=odoo
+ODOO_SERVICE=odoo
+ODOO_CONF=/etc/odoo/odoo.conf
+ODOO_BIN=/usr/bin/odoo
+FILESTORE=/var/lib/odoo/.local/share/Odoo/filestore
+EXPORT_DIR=/var/lib/odooguard-export
+SLOT=odooguard
+APPNAME=odooguard
+# Chemins réinstallables par fs-import : "chemin:propriétaire:groupe" séparés par des espaces
+IMPORT_PATHS="/etc/odoo:odoo:odoo"
+RECOVERY_TIMEOUT=21600
+# shellcheck source=/dev/null
+[[ -r "$CONF" ]] && . "$CONF"
+
+TS=$(date +%Y%m%d-%H%M%S)
+cmd="${SSH_ORIGINAL_COMMAND:-$*}"
+
+log()  { logger -t odooguard-agent -p daemon.info -- "$*" 2>/dev/null || true; }
+die()  { logger -t odooguard-agent -p daemon.err -- "ERREUR: $*" 2>/dev/null || true; echo "odooguard-agent: $*" >&2; exit 1; }
+json_str() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
+as_pg() { runuser -u postgres -- "$@"; }
+psql_q() { as_pg psql -XAtq "$@"; }
+
+log "appel : ${cmd:0:300}"
+
+# --- rsync en lecture seule (sauvegarde des fichiers) -----------------------
+if [[ "$cmd" == "rsync --server --sender "* ]]; then
+    exec nice -n 10 ionice -c2 -n7 /usr/bin/rrsync -ro /
+fi
+
+[[ "$cmd" =~ ^[A-Za-z0-9_.:+/=\ -]+$ ]] || die "caractères interdits dans la commande"
+read -ra argv <<< "$cmd"
+verb="${argv[0]:-}"
+set -- "${argv[@]:1}"
+
+valid_db()      { [[ "$1" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}$ ]] || die "nom de base invalide : $1"; }
+valid_ver()     { [[ "$1" =~ ^[0-9]{2}$ ]] || die "version PostgreSQL invalide : $1"; }
+valid_cluster() { [[ "$1" =~ ^[a-z0-9_]{1,32}$ ]] || die "nom d'instance invalide : $1"; }
+
+db_exists() { [[ "$(psql_q -v n="$1" <<< "select count(*) from pg_database where datname = :'n'")" == "1" ]]; }
+
+terminate_db() {
+    psql_q -v n="$1" <<< "select pg_terminate_backend(pid) from pg_stat_activity where datname = :'n' and pid <> pg_backend_pid()" >/dev/null
+}
+
+case "$verb" in
+# --------------------------------------------------------------- lecture
+pg-control)
+    valid_ver "$1"; valid_cluster "$2"
+    exec cat "/var/lib/postgresql/$1/$2/global/pg_control"
+    ;;
+wal-status)
+    valid_ver "$1"; valid_cluster "$2"
+    psql_q <<SQL
+select json_build_object(
+  'streaming', exists(select 1 from pg_stat_replication where application_name = '$APPNAME' and state = 'streaming'),
+  'flush_lag_s', (select extract(epoch from coalesce(flush_lag, interval '0')) from pg_stat_replication where application_name = '$APPNAME' limit 1),
+  'lag_bytes', (select pg_wal_lsn_diff(pg_current_wal_lsn(), flush_lsn) from pg_stat_replication where application_name = '$APPNAME' limit 1),
+  'slot_active', (select active from pg_replication_slots where slot_name = '$SLOT'),
+  'slot_wal_status', (select wal_status from pg_replication_slots where slot_name = '$SLOT'),
+  'slot_retained_bytes', (select pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) from pg_replication_slots where slot_name = '$SLOT'),
+  'server_time', now())
+SQL
+    ;;
+export)
+    exec /usr/local/sbin/odooguard-export
+    ;;
+db-exists)
+    valid_db "$1"
+    if db_exists "$1"; then echo '{"exists": true}'; else echo '{"exists": false}'; fi
+    ;;
+db-report)
+    valid_db "$1"
+    db="$1"
+    db_exists "$db" || die "base absente : $db"
+    report=$(as_pg psql -XAtq -d "$db" <<'SQL'
+select json_build_object(
+  'partners',     (select count(*) from res_partner),
+  'users',        (select count(*) from res_users),
+  'companies',    (select count(*) from res_company),
+  'account_moves',(select case when to_regclass('account_move') is null then null else
+                    (xpath('/row/c/text()', query_to_xml('select count(*) as c from account_move', false, true, '')))[1]::text::bigint end),
+  'sale_orders',  (select case when to_regclass('sale_order') is null then null else
+                    (xpath('/row/c/text()', query_to_xml('select count(*) as c from sale_order', false, true, '')))[1]::text::bigint end),
+  'attachments',  (select count(*) from ir_attachment),
+  'attachments_in_filestore', (select count(*) from ir_attachment where store_fname is not null),
+  'last_write',   (select max(write_date) from res_partner),
+  'neutralized',  (select value from ir_config_parameter where key = 'database.is_neutralized'),
+  'modules_installed', (select count(*) from ir_module_module where state = 'installed'))
+SQL
+)
+    # Lisibilité des pièces jointes : échantillon de 200 fichiers au hasard
+    total=0; missing=0
+    while IFS= read -r f; do
+        [[ -z "$f" ]] && continue
+        total=$((total + 1))
+        if ! runuser -u "$ODOO_USER" -- test -r "$FILESTORE/$db/$f"; then missing=$((missing + 1)); fi
+    done < <(as_pg psql -XAtq -d "$db" -c "select store_fname from ir_attachment where store_fname is not null order by random() limit 200")
+    python3 - "$report" "$total" "$missing" <<'PY'
+import json, sys
+r = json.loads(sys.argv[1]); r["attachments_sampled"] = int(sys.argv[2]); r["attachments_missing"] = int(sys.argv[3])
+print(json.dumps(r))
+PY
+    ;;
+odoo-status)
+    systemctl is-active "$ODOO_SERVICE" || true
+    ;;
+# --------------------------------------------------------------- écriture
+odoo-stop)  log "arrêt d'Odoo";     systemctl stop "$ODOO_SERVICE" ;;
+odoo-start) log "démarrage d'Odoo"; systemctl start "$ODOO_SERVICE" ;;
+create-slot)
+    valid_ver "$1"; valid_cluster "$2"
+    psql_q <<< "select pg_create_physical_replication_slot('$SLOT') where not exists (select 1 from pg_replication_slots where slot_name = '$SLOT')" >/dev/null
+    echo '{"slot": "ok"}'
+    ;;
+db-import)
+    valid_db "$1"
+    db="$1"; replace="${2:-}"
+    if db_exists "$db"; then
+        [[ "$replace" == "--replace" ]] || die "la base $db existe déjà (remplacement non demandé)"
+        old="${db}_avant_restauration_${TS}"
+        log "base $db renommée en $old avant restauration"
+        terminate_db "$db"
+        psql_q -v a="$db" -v b="$old" <<< 'alter database :"a" rename to :"b"'
+    fi
+    log "création de la base $db"
+    as_pg createdb -O "$ODOO_DB_USER" -E UTF8 -T template0 "$db"
+    # pg_restore lit le flux pg_dump sur l'entrée standard
+    if ! as_pg pg_restore --no-owner --no-acl --role="$ODOO_DB_USER" -d "$db"; then
+        die "pg_restore en erreur pour $db (base laissée en place pour diagnostic)"
+    fi
+    as_pg vacuumdb --analyze-only -d "$db" >/dev/null 2>&1 || true
+    log "base $db restaurée"
+    echo "{\"db\": $(json_str "$db"), \"status\": \"ok\"}"
+    ;;
+filestore-import)
+    valid_db "$1"
+    dest="$FILESTORE/$1"; replace="${2:-}"
+    if [[ -e "$dest" ]]; then
+        [[ "$replace" == "--replace" ]] || die "le filestore $dest existe déjà (remplacement non demandé)"
+        mv "$dest" "${dest}_avant_restauration_${TS}"
+        log "filestore $dest renommé avant restauration"
+    fi
+    install -d -o "$ODOO_USER" -g "$ODOO_USER" -m 750 "$dest"
+    tar -x -C "$dest" --no-same-owner -f -
+    chown -R "$ODOO_USER:$ODOO_USER" "$dest"
+    echo "{\"filestore\": $(json_str "$dest"), \"files\": $(find "$dest" -type f | wc -l)}"
+    ;;
+fs-import)
+    path="${1:-}"
+    owner=""
+    for entry in $IMPORT_PATHS; do
+        p="${entry%%:*}"; rest="${entry#*:}"
+        if [[ "$path" == "$p" ]]; then owner="$rest"; fi
+    done
+    [[ -n "$owner" ]] || die "chemin non autorisé pour fs-import : $path"
+    if [[ -e "$path" ]]; then
+        mv "$path" "${path}.avant_restauration_${TS}"
+        log "$path renommé avant restauration"
+    fi
+    install -d -m 750 "$path"
+    tar -x -C "$path" --no-same-owner -f -
+    chown -R "$owner" "$path"
+    echo "{\"path\": $(json_str "$path"), \"status\": \"ok\"}"
+    ;;
+neutralize)
+    valid_db "$1"
+    log "neutralisation de $1"
+    runuser -u "$ODOO_USER" -- "$ODOO_BIN" neutralize -c "$ODOO_CONF" -d "$1" >/dev/null
+    echo "{\"neutralized\": $(json_str "$1")}"
+    ;;
+pg-restore-cluster)
+    valid_ver "$1"; valid_cluster "$2"
+    ver="$1"; cluster="$2"; stanza="$3"; target="$4"
+    [[ "$stanza" =~ ^[a-z0-9_-]+$ ]] || die "stanza invalide"
+    datadir="/var/lib/postgresql/$ver/$cluster"
+    opts=("--stanza=$stanza")
+    if [[ "$target" == "latest" ]]; then
+        opts+=("--type=default")
+    else
+        [[ "$target" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}[+-][0-9]{4}$ ]] || die "horodatage invalide : $target"
+        opts+=("--type=time" "--target=${target/T/ }" "--target-action=promote")
+    fi
+    # Espace : l'ancien répertoire est conservé, il faut donc la place d'une 2e copie.
+    used=$(du -sb "$datadir" 2>/dev/null | cut -f1 || echo 0)
+    free=$(df -B1 --output=avail "$(dirname "$datadir")" | tail -1)
+    (( free > used * 11 / 10 )) || die "espace insuffisant pour conserver l'ancienne instance ($used o utilisés, $free o libres)"
+    log "restauration de l'instance $ver/$cluster ($target)"
+    systemctl stop "$ODOO_SERVICE" || true
+    systemctl stop "postgresql@$ver-$cluster" || true
+    old=""
+    if [[ -d "$datadir" ]] && [[ -n "$(ls -A "$datadir")" ]]; then
+        old="${datadir}.avant_restauration_${TS}"
+        mv "$datadir" "$old"
+    fi
+    install -d -o postgres -g postgres -m 700 "$datadir"
+    as_pg pgbackrest "${opts[@]}" restore
+    systemctl start "postgresql@$ver-$cluster"
+    deadline=$((SECONDS + RECOVERY_TIMEOUT))
+    until [[ "$(psql_q -c 'select pg_is_in_recovery()' 2>/dev/null)" == "f" ]]; do
+        (( SECONDS < deadline )) || die "délai de rejeu des WAL dépassé"
+        sleep 5
+    done
+    point=$(grep -h -E "recovery stopping|last completed transaction" "/var/log/postgresql/postgresql-$ver-$cluster.log" 2>/dev/null | tail -1 || true)
+    log "instance restaurée ; ancienne instance : ${old:-aucune}"
+    echo "{\"status\": \"ok\", \"old_datadir\": $(json_str "$old"), \"recovery_point\": $(json_str "$point")}"
+    ;;
+*)
+    die "verbe inconnu : $verb"
+    ;;
+esac

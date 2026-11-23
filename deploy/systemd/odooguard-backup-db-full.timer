@@ -1,0 +1,10 @@
+[Unit]
+Description=OdooGuard - sauvegarde complète hebdomadaire (dimanche 01:00)
+
+[Timer]
+OnCalendar=Sun *-*-* 01:00:00
+Persistent=true
+Unit=odooguard-backup-db@full.service
+
+[Install]
+WantedBy=timers.target

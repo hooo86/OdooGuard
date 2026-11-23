@@ -1,0 +1,15 @@
+# Vérification : %i = quick (quotidienne) | full (hebdomadaire, relecture complète)
+[Unit]
+Description=OdooGuard - vérification des sauvegardes (%i)
+OnFailure=odooguard-notify@%n.service
+
+[Service]
+Type=oneshot
+User=odooguard
+Group=odooguard
+RuntimeDirectory=odooguard
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/local/bin/odooguard verify --level=%i
+Nice=15
+IOSchedulingClass=idle
+TimeoutStartSec=12h
