@@ -216,3 +216,26 @@ def test_status_restore_test_component(cfg, monkeypatch):
     rid = h.start("restore-test", "hebdo")
     h.finish(rid, "failed", message="pièces jointes manquantes")
     assert comp()["level"] == "critical"
+
+
+# ------------------------------------------------------------------ phase 3 bis : manifeste NAS
+def test_write_manifest(cfg, tmp_path):
+    import hashlib
+    import os
+
+    from odooguard import dest as dest_mod
+    d = cfg.destinations["nas1"]
+    d.path = str(tmp_path / "nas")
+    for rel, data in (("pgbackrest/backup/lnhc/backup.info", b"x" * 10),
+                      ("restic/data/ab/abcd", b"y" * 100), ("restic/locks/l1", b"z"),
+                      ("restic/index/i.tmp", b"t")):
+        p = os.path.join(d.path, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        open(p, "wb").write(data)
+    r = dest_mod.write_manifest(cfg, d, "20261123-010000F", 12)
+    assert r == {"file_count": 2, "total_bytes": 110}
+    tsv = open(os.path.join(d.path, "MANIFEST.files.tsv"), "rb").read()
+    assert tsv == b"pgbackrest/backup/lnhc/backup.info\t10\nrestic/data/ab/abcd\t100\n"
+    head = json.load(open(os.path.join(d.path, "MANIFEST.json")))
+    assert head["files_sha256"] == hashlib.sha256(tsv).hexdigest()
+    assert head["pgbackrest_last_backup"] == "20261123-010000F" and head["file_count"] == 2

@@ -50,6 +50,7 @@ exige `--force` et la saisie du nom exact (ou `--confirm`). Elle est journalisé
 | [docs/restauration.md](docs/restauration.md) | procédures avec **et sans** OdooGuard, à imprimer |
 | [docs/retour-arriere-phase1.md](docs/retour-arriere-phase1.md) | retour arrière |
 | [docs/tests-et-recette.md](docs/tests-et-recette.md) | tests automatisés et recette des critères d'acceptation |
+| [docs/installation-phase3bis.md](docs/installation-phase3bis.md) | copie hors ligne vers G:\, rotation des disques |
 | [docs/installation-phase3.md](docs/installation-phase3.md) | VM de test isolée, test de restauration hebdomadaire, assistant de restauration web, rôles |
 | [docs/installation-phase2.md](docs/installation-phase2.md) | tableau de bord, alertes e-mail et Telegram, Zabbix, Veeam et copie G:\, retour arrière |
 
@@ -79,7 +80,7 @@ deploy/systemd/       services et timers
 install/              scripts d'installation OdooGuard et server01
 tests/                tests unitaires + tests/integration/lab.sh (bout en bout)
 deploy/zabbix/        UserParameter + modèle Zabbix
-deploy/windows/       scripts PowerShell (Veeam, rapport générique)
+deploy/windows/       PowerShell : copie hors ligne G:\, tâche planifiée, Veeam, rapport générique
 tools/mesure-impact.py  mesure de l'impact sur le temps de réponse d'Odoo
 ```
 
@@ -99,4 +100,6 @@ Aucun secret dans Git. Ils sont générés à l'installation dans `/etc/odooguar
   (instant précis, neutralisation, comptages comparés à la production, pièces jointes,
   /web/login), rapport envoyé ; assistant de restauration web avec rôles, confirmation
   et audit, exécuté par le service odooguard-jobs.
-- Phase 3 bis : script PowerShell de copie hors ligne vers G:\ adapté aux dépôts OdooGuard.
+- **Phase 3 bis (livrée)** : copie hors ligne vers G:\ (PowerShell) : contrôle du disque,
+  bascule NAS secondaire, copie robocopy ordonnée, vérification fichier par fichier
+  contre le manifeste écrit par OdooGuard, disque mis hors ligne, rapport à OdooGuard.

@@ -174,6 +174,18 @@ min_free_gb = 0
 EOF
 sed -i 's/^\[destination:nas1\]/[destination:nas1]\nenabled = no/; s/^\[destination:nas2\]/[destination:nas2]\nenabled = no/' /etc/odooguard/odooguard.conf
 $OG backup copy --dest fakenas && ok "copie vérifiée vers le NAS" || ko "copie NAS"
+python3 - <<'PY' && ok "manifeste NAS cohérent (en-tête, empreinte, tailles)" || ko "manifeste NAS"
+import hashlib, json, os
+d = "/mnt/fake-nas/odooguard"
+h = json.load(open(f"{d}/MANIFEST.json"))
+tsv = open(f"{d}/MANIFEST.files.tsv", "rb").read()
+assert h["files_sha256"] == hashlib.sha256(tsv).hexdigest() and h["file_count"] > 10
+for line in tsv.decode().splitlines():
+    f, n = line.rsplit("\t", 1)
+    assert os.path.getsize(f"{d}/{f}") == int(n), f
+PY
+(cd /mnt/fake-nas/odooguard && bad=$(while IFS=$'\t' read -r f n; do [ "$(stat -c %s "$f" 2>/dev/null)" = "$n" ] || echo "$f"; done < MANIFEST.files.tsv | wc -l); [[ $bad -eq 0 ]]) \
+  && ok "procédure B4 : contrôle shell du manifeste" || ko "contrôle shell du manifeste"
 pgbackrest --config=/etc/pgbackrest/odooguard-ingest.conf --stanza=lnhc --repo1-path=/mnt/fake-nas/odooguard/pgbackrest info >/dev/null \
   && ok "la copie NAS est un dépôt pgBackRest autonome" || ko "copie NAS illisible"
 step "8b. Vérification (dépôts locaux + NAS)"

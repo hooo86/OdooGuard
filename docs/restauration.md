@@ -299,6 +299,40 @@ Si le NAS principal est inaccessible ou renvoie des erreurs d'E/S, utiliser le N
 secondaire `//192.168.3.19/Backups` : même arborescence `odooguard/…`. En dernier
 recours : la copie hors ligne G:\ (phase 3 bis) ou la restauration Veeam de la VM entière.
 
+### B4. Depuis le disque hors ligne G:\ (tout le reste est perdu)
+
+Le disque contient, sous `OdooGuard\`, exactement la même arborescence qu'un NAS
+(`pgbackrest\`, `restic\`, `MANIFEST.*`). La procédure B2 s'applique, la source étant le disque.
+
+Perte de données : jusqu'à la date de la copie, voir `G:\OdooGuard\DERNIERE_COPIE.txt`
+(une semaine au plus avec une copie hebdomadaire).
+
+1. Brancher le disque sur le futur serveur Odoo (Debian), ou sur n'importe quel Linux.
+   Repérer la partition avec `lsblk`, puis la monter en lecture seule :
+
+   ```bash
+   sudo mkdir -p /mnt/g && sudo mount -t ntfs3 -o ro /dev/sdX1 /mnt/g
+   ```
+
+2. Copier le dépôt pgBackRest en local (le disque reste en lecture seule) :
+
+   ```bash
+   sudo rsync -a /mnt/g/OdooGuard/pgbackrest/ /var/lib/pgbackrest-repo/
+   ```
+
+3. Suivre B2 à partir de « Configuration pgBackRest temporaire ».
+   Pour restic, utiliser `-r /mnt/g/OdooGuard/restic`.
+
+Avant de commencer, on peut vérifier que la copie est complète. Cette commande liste les
+fichiers absents par rapport au manifeste ; elle ne doit rien afficher :
+
+```bash
+cd /mnt/g/OdooGuard && while IFS=$'\t' read -r f n; do [ "$(stat -c %s "$f" 2>/dev/null)" = "$n" ] || echo "ABSENT/DIFFÉRENT : $f"; done < MANIFEST.files.tsv
+```
+
+Sans aucun Linux disponible, partager `G:\OdooGuard` depuis un poste Windows, en lecture
+seule, et le monter en CIFS sur le serveur à reconstruire.
+
 ### B3. Restauration avec l'ancien format (transition)
 
 Tant que `odoo_backup.sh` tourne en parallèle (2 semaines après la mise en service),

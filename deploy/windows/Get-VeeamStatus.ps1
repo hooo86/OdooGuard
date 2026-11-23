@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Relève l'état des travaux Veeam Backup & Replication et l'envoie à OdooGuard.
 
@@ -30,6 +30,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+# « -JobNames A,B » via powershell.exe -File arrive en une seule chaîne : découpage
+$JobNames = @($JobNames | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 
 try {
     Import-Module Veeam.Backup.PowerShell -DisableNameChecking -ErrorAction Stop

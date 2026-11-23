@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Envoie un rapport d'exécution à OdooGuard (tableau de bord, alertes, Zabbix).
 

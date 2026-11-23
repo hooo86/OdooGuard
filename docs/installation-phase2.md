@@ -215,7 +215,9 @@ de VBR 12 : faire le test manuel ci-dessus sur la version installée.
 
 ### 4.2 Copie hors ligne vers G:\
 
-Ajouter à la fin du script PowerShell de copie existant (adaptation complète en phase 3 bis) :
+**Remplacé par la phase 3 bis** (`docs/installation-phase3bis.md`) : le script
+`Copy-OdooGuardOffline.ps1` envoie lui-même son rapport. Le bloc ci-dessous ne sert que si
+l'on garde un autre script de copie. Ajouter à la fin de ce script :
 
 ```powershell
 # $ok, $taille, $debut : à alimenter par le script de copie

@@ -120,7 +120,10 @@ def cmd_backup(ctx: Ctx) -> int:
                 with file_lock(cfg.lock_dir, "db", wait=3600), file_lock(cfg.lock_dir, "files", wait=3600):
                     pgr = dest_mod.copy_pgbackrest(cfg, dest)
                     rr = dest_mod.copy_restic(cfg, dest)
-                return {"label": pgr["label"], "message": "copie vérifiée", **probe, **rr}
+                    # Référence pour la copie hors ligne G:\ (phase 3 bis)
+                    man = dest_mod.write_manifest(cfg, dest, pgr["label"], rr["snapshots"])
+                return {"label": pgr["label"], "message": "copie vérifiée", "size": man["total_bytes"],
+                        **probe, **rr, **man}
             try:
                 tracked(ctx, f"copy:{name}", "copy", job)
                 print(f"copie vers {name} OK")
