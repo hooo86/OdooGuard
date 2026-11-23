@@ -33,6 +33,8 @@ psqlp() { runuser -u postgres -- psql -XAtq "$@"; }
 
 step "0. Remise à zéro du laboratoire"
 pkill -f pg_receivewal || true; pkill -f "odooguard wal-ingest" || true
+pkill -f "odooguard web" || true; pkill -f fake_services.py || true
+rm -rf /var/lib/odooguard-public /tmp/lab-fake
 for d in /srv/odooguard/staging/*/pgdata; do
   [[ -f "$d/postmaster.pid" ]] && runuser -u odooguard -- "/usr/lib/postgresql/$PG_VERSION/bin/pg_ctl" -D "$d" -m immediate stop || true
 done
@@ -193,6 +195,70 @@ if runuser -u postgres -- ssh -o BatchMode=yes pgbr-reader@127.0.0.1 "pgbackrest
   ko "commande expire acceptée"; else ok "filtre : expire refusé à server01"; fi
 if runuser -u postgres -- ssh -o BatchMode=yes pgbr-reader@127.0.0.1 "id" 2>/dev/null; then
   ko "shell accessible"; else ok "filtre : aucun shell pour server01"; fi
+
+
+step "11. Phase 2 : installation (venv réel, dépendances figées)"
+OG_IP=127.0.0.1 "$SRC/install/install-phase2.sh" >/tmp/lab-install-p2.log 2>&1 \
+  && ok "install-phase2.sh" || { ko "install-phase2.sh"; tail -5 /tmp/lab-install-p2.log; }
+nohup python3 "$SRC/tests/integration/fake_services.py" /tmp/lab-fake >/tmp/lab-fake.log 2>&1 &
+sleep 1
+python3 - <<'PY'
+import re
+p = "/etc/odooguard/odooguard.conf"
+s = open(p).read()
+s = s.replace("host = smtp.example.lan", "host = 127.0.0.1").replace("port = 587", "port = 2525")
+s = s.replace("security = starttls", "security = none")
+s = s.replace("chat_ids =\n", "chat_ids = -1001234\napi = http://127.0.0.1:8081\n", 1)
+s = s.replace("[external:offline]", "[external:offline]\nenabled = no")
+open(p, "w").write(s)
+PY
+echo "123:FAUXJETON" > /etc/odooguard/telegram.token
+$OG alert-test >/tmp/lab-alerttest.txt 2>&1 && ok "alert-test : journal, e-mail, Telegram" || { ko "alert-test"; cat /tmp/lab-alerttest.txt; }
+nm=$(ls /tmp/lab-fake/mail-*.eml 2>/dev/null | wc -l); nt=$(ls /tmp/lab-fake/telegram-*.txt 2>/dev/null | wc -l)
+[[ $nm -eq 1 && $nt -eq 1 ]] && ok "message de test reçu (1 e-mail, 1 Telegram)" || ko "reçus : $nm e-mail(s), $nt Telegram"
+
+step "12. Alertes d'état : NAS absent -> 1 alerte groupée, pas de rafale, puis résolu"
+rm -f /tmp/lab-fake/*
+$OG status --check --record >/dev/null 2>&1 || true
+n1=$(ls /tmp/lab-fake/mail-*.eml 2>/dev/null | wc -l)
+grep -qs "fakenas" /tmp/lab-fake/mail-*.eml && [[ $n1 -eq 1 ]] && ok "alerte NAS absent envoyée (1 e-mail)" || ko "alerte NAS : $n1 e-mail(s)"
+grep -qs "veeam" /tmp/lab-fake/telegram-*.txt && ok "absence de rapport Veeam signalée" || ko "Veeam non signalé"
+$OG status --check --record >/dev/null 2>&1 || true
+n2=$(ls /tmp/lab-fake/mail-*.eml 2>/dev/null | wc -l)
+[[ $n2 -eq $n1 ]] && ok "2e contrôle : aucun nouvel envoi (anti-rafale)" || ko "rafale : $n2 e-mails"
+sed -i '/^mountpoint = \/mnt\/fake-nas$/d' /etc/odooguard/odooguard.conf
+$OG status --check --record >/dev/null 2>&1 || true
+grep -qs "fakenas : r=C3=A9solu" $(ls -t /tmp/lab-fake/mail-*.eml | head -1) && ok "message « résolu » après retour du NAS" || ko "pas de message résolu"
+
+step "13. Zabbix (compte sans droit, copie publique de l'état)"
+[[ "$(stat -c %a /var/lib/odooguard-public/status.json)" == "644" ]] && ok "status.json public en 644" || ko "droits status.json"
+v=$(runuser -u nobody -- /usr/local/bin/odooguard-zabbix overall)
+[[ "$v" =~ ^[0-3]$ ]] && ok "odooguard-zabbix overall = $v (compte nobody)" || ko "zabbix overall : $v"
+runuser -u nobody -- /usr/local/bin/odooguard-zabbix discovery | grep -q '"{#COMPONENT}": "db"' && ok "découverte Zabbix" || ko "découverte"
+v=$(runuser -u nobody -- /usr/local/bin/odooguard-zabbix rpo db)
+[[ "$v" != "-1" ]] && ok "RPO base exposé : $v s" || ko "RPO base"
+if runuser -u nobody -- cat /var/lib/odooguard/history.db >/dev/null 2>&1; then ko "nobody lit l'historique !"; else ok "historique privé inaccessible à Zabbix"; fi
+
+step "14. Tableau de bord HTTPS et rapport Veeam"
+ODOOGUARD_NEW_PASSWORD='motdepasse-labo-12' $OG web-user add admin >/dev/null && ok "compte web créé" || ko "web-user"
+(cd / && runuser -u odooguard -- env PYTHONPATH=/opt/odooguard nohup /opt/odooguard/venv/bin/python -m odooguard web >/tmp/lab-web.log 2>&1 &)
+for i in $(seq 1 20); do curl -sk -o /dev/null https://127.0.0.1:8443/healthz && break; sleep 1; done
+code=$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/)
+[[ "$code" == "303" ]] && ok "accès sans session redirigé vers /login" || ko "accès anonyme : $code"
+curl -sk -c /tmp/lab-cj -o /dev/null -d 'username=admin&password=motdepasse-labo-12' https://127.0.0.1:8443/login
+curl -sk -b /tmp/lab-cj https://127.0.0.1:8443/ | grep -q "Base PostgreSQL" && ok "tableau de bord (HTTPS, connecté)" || ko "tableau de bord"
+curl -sk -b /tmp/lab-cj https://127.0.0.1:8443/backups | grep -q "full\|complète" && ok "page Sauvegardes (pgBackRest réel)" || ko "page Sauvegardes"
+TOK=$(cat /etc/odooguard/tokens/veeam)
+code=$(curl -sk -o /dev/null -w '%{http_code}' -H "Authorization: Bearer faux" -H 'Content-Type: application/json' \
+  -d '{"status":"success"}' https://127.0.0.1:8443/api/v1/report/veeam)
+[[ "$code" == "403" ]] && ok "rapport avec mauvais jeton refusé" || ko "mauvais jeton : $code"
+curl -sk -o /dev/null -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+  -d "{\"status\":\"success\",\"finished_at\":\"$(date -Iseconds)\",\"message\":\"5 VM OK\",\"size_bytes\":1000}" \
+  https://127.0.0.1:8443/api/v1/report/veeam
+$OG status --record >/dev/null 2>&1 || true
+[[ "$(runuser -u nobody -- /usr/local/bin/odooguard-zabbix component ext:veeam level)" == "0" ]] \
+  && ok "rapport Veeam reçu : composant OK" || ko "rapport Veeam non pris en compte"
+pkill -f "odooguard web" || true; pkill -f fake_services.py || true
 
 echo; echo "Résultat : $pass OK, $fail échec(s)"
 [[ $fail -eq 0 ]]

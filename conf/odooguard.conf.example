@@ -94,3 +94,59 @@ min_free_gb = 500
 mountpoint = /mnt/nas-backups
 path = /mnt/nas-backups/odooguard
 min_free_gb = 500
+
+# ============================================================== phase 2
+# ----------------------------------------------------------------- alertes
+[alerts]
+# journal (toujours actif), email, telegram
+channels = journal, email, telegram
+# Niveau minimal notifié par e-mail / Telegram : warning ou critical
+min_level = warning
+# Rappel tant qu'un problème persiste (heures)
+repeat_hours = 4
+send_resolved = yes
+
+[smtp]
+# [À COMPLÉTER] relais SMTP interne ou Office 365 (smtp.office365.com:587 starttls)
+host = smtp.example.lan
+port = 587
+# starttls | ssl | none
+security = starttls
+user =
+# Mot de passe dans un fichier 600 (jamais ici)
+password_file = /etc/odooguard/smtp.pass
+from = odooguard@example.lan
+to = informatique@example.lan
+
+[telegram]
+# Jeton du bot (BotFather) dans un fichier 600 ; chat_ids : utilisateurs ou groupe
+token_file = /etc/odooguard/telegram.token
+chat_ids =
+# Si l'accès Internet passe par un proxy :
+https_proxy =
+
+# ----------------------------------------------------------------- tableau de bord
+[web]
+listen = 0.0.0.0
+port = 8443
+certfile = /etc/odooguard/web/odooguard.crt
+keyfile = /etc/odooguard/web/odooguard.key
+users_file = /etc/odooguard/web/users
+secret_file = /etc/odooguard/web/secret
+session_hours = 8
+# Copie publique de l'état pour Zabbix (sans secret)
+public_status = /var/lib/odooguard-public/status.json
+
+# ----------------------------------------------------------------- composants extérieurs
+# Rapports envoyés par les scripts PowerShell (deploy/windows/Send-OdooGuardReport.ps1)
+[external:veeam]
+label = Veeam B&R (sauvegarde des VM)
+# Alerte critique si aucune sauvegarde Veeam réussie depuis 26 h
+max_age = 93600
+token_file = /etc/odooguard/tokens/veeam
+
+[external:offline]
+label = Copie hors ligne G:\
+# Copie hebdomadaire : 8 jours de tolérance [À AJUSTER au rythme réel]
+max_age = 691200
+token_file = /etc/odooguard/tokens/offline

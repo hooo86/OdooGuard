@@ -38,6 +38,7 @@ class Ctx:
         os.makedirs(self.cfg.state_dir, exist_ok=True)
         self.history = History(self.cfg.history_db)
         self.auditor = Auditor(self.history, self.cfg.audit_log)
+        notify.configure(self.cfg, self.history)
 
 
 def tracked(ctx: Ctx, component: str, kind: str, func, *, alert: bool = True):
@@ -262,9 +263,8 @@ def cmd_status(ctx: Ctx) -> int:
         lines.append(f"  [{c['level'].upper():^8}] {c['name']:<14} {', '.join(extra)}  {c.get('message', '')}")
     out(ctx, st, "\n".join(lines))
     if ctx.args.check:
-        if st["overall"] != "ok":
-            bad = [f"{c['name']}: {c.get('message', '')}" for c in st["components"] if c["level"] != "ok"]
-            notify.send(st["overall"], f"OdooGuard : état {st['overall']}", "; ".join(bad)[:1500])
+        # Notification des seuls changements (nouveau, aggravé, rappel, résolu)
+        notify.Alerter(cfg, ctx.history).process(st)
         return status_mod.LEVELS.get(st["overall"], 2)
     return 0
 
@@ -340,6 +340,66 @@ def cmd_notify_failure(ctx: Ctx) -> int:
     unit = ctx.args.unit
     res = run(["journalctl", "-u", unit, "-n", "25", "--no-pager", "-o", "cat"], check=False)
     notify.send("critical", f"OdooGuard : l'unité {unit} a échoué", res.stdout[-3000:])
+    return 0
+
+
+def cmd_alert_test(ctx: Ctx) -> int:
+    """Envoie un message de test sur tous les canaux configurés."""
+    res = notify.dispatch(ctx.cfg, ctx.args.level, "message de test",
+                          "Si vous lisez ceci, ce canal d'alerte OdooGuard fonctionne.",
+                          key="test", history=ctx.history, force_all=True)
+    for ch, r in res.items():
+        print(f"{ch:<10} {r}")
+    return 0 if all(r == "ok" for r in res.values()) else 2
+
+
+def cmd_web_user(ctx: Ctx) -> int:
+    import getpass
+
+    from odooguard.web import auth
+    path = ctx.cfg.web.users_file
+    users = auth.read_users(path)
+    a = ctx.args
+    if a.action == "list":
+        for name in sorted(users):
+            print(name)
+        return 0
+    if not auth.valid_username(a.name or ""):
+        raise OdooGuardError("nom invalide (2 à 32 caractères : lettres, chiffres, . _ -)", "usage")
+    if a.action == "remove":
+        if users.pop(a.name, None) is None:
+            raise OdooGuardError(f"compte inconnu : {a.name}", "usage")
+        auth.write_users(path, users)
+        ctx.auditor.record("web-user-remove", a.name, "success")
+        print(f"compte {a.name} supprimé")
+        return 0
+    pw = os.environ.get("ODOOGUARD_NEW_PASSWORD") or getpass.getpass("Mot de passe (12 caractères min.) : ")
+    if len(pw) < 12:
+        raise OdooGuardError("mot de passe trop court (12 caractères minimum)", "usage")
+    if not os.environ.get("ODOOGUARD_NEW_PASSWORD") and getpass.getpass("Confirmation : ") != pw:
+        raise OdooGuardError("les deux saisies diffèrent", "usage")
+    users[a.name] = auth.hash_password(pw)
+    auth.write_users(path, users)
+    ctx.auditor.record("web-user-set", a.name, "success")
+    print(f"compte {a.name} enregistré")
+    return 0
+
+
+def cmd_web(ctx: Ctx) -> int:
+    from odooguard.web.app import serve
+    serve(ctx.cfg)
+    return 0
+
+
+def cmd_report(ctx: Ctx) -> int:
+    """Enregistre un rapport extérieur à la main (essai, ou script local)."""
+    from odooguard import external
+    a = ctx.args
+    if a.name not in ctx.cfg.externals:
+        raise OdooGuardError(f"composant extérieur inconnu : {a.name} (section [external:{a.name}])", "usage")
+    r = external.store(ctx.history, a.name, {"status": a.status, "message": a.message,
+                                             "finished_at": a.finished_at}, "local")
+    print(f"rapport {a.name} enregistré : {r['status']}")
     return 0
 
 
@@ -444,6 +504,21 @@ def build_parser() -> argparse.ArgumentParser:
     nf = sub.add_parser("notify-failure", help="(systemd OnFailure) alerter sur l'échec d'une unité")
     nf.add_argument("unit")
     nf.set_defaults(func=cmd_notify_failure)
+    at = sub.add_parser("alert-test", help="envoyer un message de test sur tous les canaux")
+    at.add_argument("--level", choices=["warning", "critical"], default="warning")
+    at.set_defaults(func=cmd_alert_test)
+    wu = sub.add_parser("web-user", help="comptes du tableau de bord")
+    wu.add_argument("action", choices=["add", "remove", "list"])
+    wu.add_argument("name", nargs="?")
+    wu.set_defaults(func=cmd_web_user)
+    wb = sub.add_parser("web", help="lancer le tableau de bord (service odooguard-web)")
+    wb.set_defaults(func=cmd_web)
+    rp = sub.add_parser("report", help="enregistrer un rapport extérieur (Veeam, copie G:)")
+    rp.add_argument("name")
+    rp.add_argument("--status", choices=["success", "warning", "failed"], required=True)
+    rp.add_argument("--message", default="")
+    rp.add_argument("--finished-at", dest="finished_at")
+    rp.set_defaults(func=cmd_report)
     i = sub.add_parser("init", help="initialiser les dépôts (une fois, après installation)")
     i.set_defaults(func=cmd_init)
     return p

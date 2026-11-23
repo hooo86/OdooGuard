@@ -125,7 +125,7 @@ chmod 600 /etc/pgbackrest/reader.conf
 
 step "8. OdooGuard (application Python, sans dépendance externe en phase 1)"
 install -d -m 755 /opt/odooguard
-rsync -a --delete --exclude .git --exclude tests "$SRC/" /opt/odooguard/
+rsync -a --delete --exclude .git --exclude tests --exclude venv "$SRC/" /opt/odooguard/
 cat > /usr/local/bin/odooguard <<'EOF'
 #!/bin/sh
 exec env PYTHONPATH=/opt/odooguard python3 -m odooguard "$@"

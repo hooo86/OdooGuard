@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Sauvegardes{% endblock %}
+{% block content %}
+<h1>Sauvegardes disponibles</h1>
+{% for e in errors %}<p class="banner banner-critical" role="alert">{{ e }}</p>{% endfor %}
+<p>Restauration à un instant précis possible
+  {% if window[0] %}du <strong>{{ fmt_time(window[0]) }}</strong> jusqu'au dernier WAL reçu ({{ window[1] }}){% else %}: aucune sauvegarde{% endif %}.
+  Commande : <code>odooguard restore db --db LNHC_Prod_2025 --as COPIE --time "AAAA-MM-JJ HH:MM" --target testvm</code></p>
+<h2>Base de données (pgBackRest)</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Étiquette</th><th>Type</th><th>Début</th><th>Fin</th><th>Durée</th><th>Taille base</th><th>Taille dépôt</th><th>Ajouté</th></tr></thead>
+  <tbody>
+  {% for b in db %}
+    <tr><td><code>{{ b.label }}</code></td><td>{{ {'full': 'complète', 'diff': 'différentielle', 'incr': 'incrémentale'}[b.type] }}</td>
+      <td>{{ fmt_time(b.start) }}</td><td>{{ fmt_time(b.stop) }}</td><td class="num">{{ fmt_age(b.duration) }}</td>
+      <td class="num">{{ fmt_size(b.size) }}</td><td class="num">{{ fmt_size(b.repo_size) }}</td><td class="num">{{ fmt_size(b.repo_delta) }}</td></tr>
+  {% else %}<tr><td colspan="8" class="muted">Aucune sauvegarde.</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+<h2>Fichiers (restic, 100 derniers instantanés)</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Instantané</th><th>Date</th><th>Taille traitée</th><th>Ajouté</th></tr></thead>
+  <tbody>
+  {% for s in files %}
+    <tr><td><code>{{ s.short_id }}</code></td><td>{{ s.time[:19].replace('T', ' ') }} UTC</td>
+      <td class="num">{{ fmt_size((s.summary or {}).get('total_bytes_processed')) }}</td>
+      <td class="num">{{ fmt_size((s.summary or {}).get('data_added')) }}</td></tr>
+  {% else %}<tr><td colspan="4" class="muted">Aucun instantané.</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+{% endblock %}

@@ -18,6 +18,7 @@ import json
 import os
 import time
 
+from odooguard import external
 from odooguard.config import Config
 from odooguard.files import Restic
 from odooguard.history import History
@@ -140,6 +141,28 @@ def compute(cfg: Config, history: History, *, query_source: bool = True) -> dict
         except OSError as exc:
             comps.append(_component(label, "critical", message=str(exc)))
 
+    # -------------------------------------------------- Veeam, copie hors ligne G:
+    comps.extend(external.components(cfg, history, now))
+
+    # -------------------------------------------------- chaîne d'alerte elle-même
+    # Si l'e-mail ET Telegram échouent, personne n'est prévenu : on le signale
+    # (tableau de bord, Zabbix) comme un problème à part entière.
+    remote_channels = [c for c in cfg.alerts.channels if c != "journal"]
+    if remote_channels:
+        notes = [n for n in history.notifications(20) if now - n["ts"] < 24 * 3600]
+        if notes:
+            res = json.loads(notes[0]["channels"] or "{}")
+            failed = [c for c in remote_channels if c in res and res[c] != "ok"]
+            if failed and len(failed) == len([c for c in remote_channels if c in res]):
+                comps.append(_component("alerting", "critical", message=(
+                    "aucun canal d'alerte n'a pu envoyer le dernier message : "
+                    + "; ".join(f"{c} {res[c]}" for c in failed))[:400]))
+            elif failed:
+                comps.append(_component("alerting", "warning", message="; ".join(
+                    f"{c} {res[c]}" for c in failed)[:400]))
+            else:
+                comps.append(_component("alerting", "ok", message="canaux opérationnels"))
+
     # -------------------------------------------------- échecs récents non résolus
     for comp in ("db", "files"):
         lastrun = history.last(comp)
@@ -165,6 +188,15 @@ def record(cfg: Config, history: History, status: dict) -> None:
         json.dump(status, fh, indent=2, default=str)
     os.chmod(tmp, 0o644)
     os.replace(tmp, cfg.status_file)
+    # Copie publique (sans secret) lisible par l'agent Zabbix : /var/lib/odooguard
+    # n'est pas accessible aux autres comptes.
+    pub = cfg.web.public_status
+    if pub and os.path.isdir(os.path.dirname(pub)):
+        tmp = pub + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(status, fh, indent=2, default=str)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, pub)
     for key in ("db_seconds", "files_seconds"):
         val = status["rpo"].get(key)
         if val is not None:

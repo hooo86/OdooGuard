@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Historique{% endblock %}
+{% block content %}
+<h1>Historique des exécutions</h1>
+<form method="get" class="filters">
+  <label>Composant
+    <select name="component">
+      <option value="">tous</option>
+      {% for c in components %}<option value="{{ c }}" {% if c == component %}selected{% endif %}>{{ c }}</option>{% endfor %}
+    </select>
+  </label>
+  <button type="submit">Filtrer</button>
+</form>
+{% include "_runs.html" %}
+{% endblock %}

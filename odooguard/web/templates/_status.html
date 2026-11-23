@@ -1,0 +1,51 @@
+{% from "_badge.html" import badge %}
+<div id="status" hx-get="/partials/status" hx-trigger="every 30s" hx-swap="outerHTML">
+  {% if st.stale %}
+  <p class="banner banner-critical" role="alert">
+    <strong>État périmé</strong> : le contrôle automatique (odooguard-status.timer) n'a pas produit d'état
+    depuis {{ fmt_age((st.generated_at and (now_ts - st.generated_at)) or None) }}. Vérifier le serveur OdooGuard.
+  </p>
+  {% endif %}
+  <section class="hero">
+    <div class="hero-main">
+      <div class="label">État global</div>
+      <div class="hero-value">{{ badge(st.overall) }}</div>
+      <div class="muted">calculé le {{ fmt_time(st.generated_at) }}</div>
+    </div>
+    <div class="hero-kpi">
+      <div class="label">Perte de données max. — base</div>
+      <div class="kpi">{{ fmt_age(st.rpo.db_seconds) }}</div>
+      <div class="muted">objectif ≤ 1 h</div>
+    </div>
+    <div class="hero-kpi">
+      <div class="label">Perte de données max. — fichiers</div>
+      <div class="kpi">{{ fmt_age(st.rpo.files_seconds) }}</div>
+      <div class="muted">objectif ≤ 1 h</div>
+    </div>
+    <div class="hero-kpi">
+      <div class="label">Alertes actives</div>
+      <div class="kpi">{{ active|length }}</div>
+      <div class="muted"><a href="/alerts">détail</a></div>
+    </div>
+  </section>
+
+  <div class="table-wrap"><table class="components">
+    <caption>Dernière sauvegarde réussie par composant</caption>
+    <thead><tr><th>Composant</th><th>État</th><th>Âge</th><th>Taille</th><th>Ajouté</th><th>Durée</th><th>Détail</th></tr></thead>
+    <tbody>
+    {% for c in st.components %}
+      <tr class="row-{{ c.level }}">
+        <th scope="row">{{ label(c) }}<div class="muted small">{{ c.name }}</div></th>
+        <td>{{ badge(c.level) }}</td>
+        <td class="num">{% if 'age' in c %}{{ fmt_age(c.age) }}{% else %}—{% endif %}</td>
+        <td class="num">{{ fmt_size(c.size) if c.get('size') is not none else '—' }}</td>
+        <td class="num">{{ fmt_size(c.added) if c.get('added') is not none else '—' }}</td>
+        <td class="num">{{ fmt_age(c.duration) if c.get('duration') is not none else '—' }}</td>
+        <td class="msg">{{ c.message or '' }}{% if c.last_failure %}<div class="small">dernier échec {{ fmt_time(c.last_failure.at) }} [{{ c.last_failure.category }}] : {{ c.last_failure.message }}</div>{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">Aucun état disponible.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</div>

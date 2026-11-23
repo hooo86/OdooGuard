@@ -1,0 +1,166 @@
+zabbix_export:
+  version: '6.0'
+  date: '2026-11-23T00:00:00Z'
+  groups:
+    - uuid: 8325c654eff14a5f9cb0d97b67338457
+      name: Templates/Applications
+  templates:
+    - uuid: 6e72c796940c4ac696b416299d8dcd8e
+      template: 'OdooGuard by Zabbix agent 2'
+      name: 'OdooGuard by Zabbix agent 2'
+      description: |
+        Supervision d'OdooGuard (sauvegardes Odoo du LNHC). À lier à l'hôte OdooGuard
+        (agent 2 + deploy/zabbix/userparameter_odooguard.conf). Les valeurs viennent de
+        /var/lib/odooguard-public/status.json, recalculé toutes les 5 min.
+        Niveaux : 0 OK, 1 avertissement, 2 critique, 3 inconnu (état absent ou périmé).
+      groups:
+        - name: Templates/Applications
+      items:
+        - uuid: 8d525034f65e412bab8ba2ce4e798ae1
+          name: 'OdooGuard : état global'
+          key: odooguard.overall
+          delay: 1m
+          history: 90d
+          valuemap:
+            name: 'OdooGuard niveau'
+          tags:
+            - tag: component
+              value: odooguard
+          triggers:
+            - uuid: 690fc7f3fff942a9b580f7a418efb346
+              expression: 'last(/OdooGuard by Zabbix agent 2/odooguard.overall)=2'
+              name: 'OdooGuard : sauvegardes en état CRITIQUE'
+              priority: HIGH
+              description: 'Au moins un composant est critique. Détail : tableau de bord OdooGuard (https://<odooguard>:8443).'
+            - uuid: 1ea4ebceb9464fbe9d673a8f58adb8d5
+              expression: 'last(/OdooGuard by Zabbix agent 2/odooguard.overall)=3'
+              name: 'OdooGuard : état inconnu (contrôle arrêté ?)'
+              priority: HIGH
+        - uuid: c7e918bc18604f7c8cce829f44cfae8d
+          name: 'OdooGuard : âge de l''état'
+          key: odooguard.status.age
+          delay: 1m
+          history: 30d
+          value_type: FLOAT
+          units: s
+          tags:
+            - tag: component
+              value: odooguard
+          triggers:
+            - uuid: 5b7e7a2ba050483d91169257b9e51b4d
+              expression: 'last(/OdooGuard by Zabbix agent 2/odooguard.status.age)>1200 or nodata(/OdooGuard by Zabbix agent 2/odooguard.status.age,15m)=1'
+              name: 'OdooGuard : l''état n''est plus mis à jour depuis plus de 20 min'
+              priority: HIGH
+              description: 'Vérifier odooguard-status.timer et la VM OdooGuard.'
+        - uuid: 32d133a3bc2649049bc04ddf9687dff2
+          name: 'OdooGuard : perte de données max. (base)'
+          key: 'odooguard.rpo[db]'
+          delay: 5m
+          history: 400d
+          value_type: FLOAT
+          units: s
+          tags:
+            - tag: component
+              value: rpo
+          triggers:
+            - uuid: 73ec1844583f40c7b974c5ef61eff3bc
+              expression: 'last(/OdooGuard by Zabbix agent 2/odooguard.rpo[db])>3600'
+              name: 'OdooGuard : perte de données possible > 1 h sur la base'
+              priority: HIGH
+        - uuid: 5af0c1e90d31488bbad595cc56826c1d
+          name: 'OdooGuard : perte de données max. (fichiers)'
+          key: 'odooguard.rpo[files]'
+          delay: 5m
+          history: 400d
+          value_type: FLOAT
+          units: s
+          tags:
+            - tag: component
+              value: rpo
+          triggers:
+            - uuid: eea7c494de674d4ba6f3b3abc4f69560
+              expression: 'last(/OdooGuard by Zabbix agent 2/odooguard.rpo[files])>3600'
+              name: 'OdooGuard : perte de données possible > 1 h sur les fichiers'
+              priority: AVERAGE
+      discovery_rules:
+        - uuid: 1cc99ddd6075450ea3ed94a8658a2a45
+          name: 'OdooGuard : composants'
+          key: odooguard.discovery
+          delay: 15m
+          lifetime: 7d
+          item_prototypes:
+            - uuid: dfc74022ceca4d94b4df6f331b2ab216
+              name: 'OdooGuard {#COMPONENT} : niveau'
+              key: 'odooguard.component[{#COMPONENT},level]'
+              delay: 1m
+              history: 90d
+              valuemap:
+                name: 'OdooGuard niveau'
+              tags:
+                - tag: component
+                  value: '{#COMPONENT}'
+              trigger_prototypes:
+                - uuid: 6e402e05c884402aba5b0f5981fbacd5
+                  expression: 'last(/OdooGuard by Zabbix agent 2/odooguard.component[{#COMPONENT},level])=2'
+                  name: 'OdooGuard : {#LABEL} ({#COMPONENT}) critique'
+                  opdata: '{ITEM.LASTVALUE}'
+                  priority: HIGH
+                  manual_close: 'YES'
+                - uuid: 0cf0ba06065845f6b3e9e8c9bcacaea8
+                  expression: 'last(/OdooGuard by Zabbix agent 2/odooguard.component[{#COMPONENT},level])=1'
+                  name: 'OdooGuard : {#LABEL} ({#COMPONENT}) en avertissement'
+                  priority: WARNING
+                  manual_close: 'YES'
+            - uuid: 1c92c365fa3144c4a374e12c5a54cfc1
+              name: 'OdooGuard {#COMPONENT} : âge de la dernière réussite'
+              key: 'odooguard.component[{#COMPONENT},age]'
+              delay: 5m
+              history: 90d
+              value_type: FLOAT
+              units: s
+              description: '-1 = jamais / sans objet'
+              tags:
+                - tag: component
+                  value: '{#COMPONENT}'
+            - uuid: 871fdd1f5e7c43b6889dc984ade59203
+              name: 'OdooGuard {#COMPONENT} : taille'
+              key: 'odooguard.component[{#COMPONENT},size]'
+              delay: 15m
+              history: 400d
+              value_type: FLOAT
+              units: B
+              tags:
+                - tag: component
+                  value: '{#COMPONENT}'
+            - uuid: 49cc725f8f1f40eba640dd3cff4f910f
+              name: 'OdooGuard {#COMPONENT} : durée'
+              key: 'odooguard.component[{#COMPONENT},duration]'
+              delay: 15m
+              history: 400d
+              value_type: FLOAT
+              units: s
+              tags:
+                - tag: component
+                  value: '{#COMPONENT}'
+            - uuid: 1c154dc9a4d844cd8f7c9836919680be
+              name: 'OdooGuard {#COMPONENT} : message'
+              key: 'odooguard.component[{#COMPONENT},message]'
+              delay: 5m
+              history: 30d
+              trends: '0'
+              value_type: TEXT
+              tags:
+                - tag: component
+                  value: '{#COMPONENT}'
+      valuemaps:
+        - uuid: b4743eba09c24b81866129b6a2708c45
+          name: 'OdooGuard niveau'
+          mappings:
+            - value: '0'
+              newvalue: OK
+            - value: '1'
+              newvalue: Avertissement
+            - value: '2'
+              newvalue: Critique
+            - value: '3'
+              newvalue: Inconnu

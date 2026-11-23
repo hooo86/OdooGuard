@@ -65,6 +65,50 @@ class Destination:
 
 
 @dataclass
+class External:
+    """Composant extérieur qui rend compte de son état à OdooGuard (Veeam, copie G:\\)."""
+
+    name: str
+    label: str
+    max_age: int = 26 * 3600  # au-delà sans rapport réussi : critique
+    token_file: str = ""  # jeton d'envoi (Bearer), fichier 600
+    enabled: bool = True
+
+
+@dataclass
+class AlertSettings:
+    channels: list[str] = field(default_factory=lambda: ["journal"])
+    min_level: str = "warning"  # niveau minimal notifié
+    repeat_hours: float = 4.0  # rappel tant que le problème persiste
+    send_resolved: bool = True
+    # E-mail
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_security: str = "starttls"  # starttls | ssl | none
+    smtp_user: str = ""
+    smtp_password_file: str = ""
+    mail_from: str = ""
+    mail_to: list[str] = field(default_factory=list)
+    # Telegram
+    telegram_token_file: str = ""
+    telegram_chat_ids: list[str] = field(default_factory=list)
+    telegram_api: str = "https://api.telegram.org"
+    https_proxy: str = ""
+
+
+@dataclass
+class WebSettings:
+    listen: str = "0.0.0.0"
+    port: int = 8443
+    certfile: str = "/etc/odooguard/web/odooguard.crt"
+    keyfile: str = "/etc/odooguard/web/odooguard.key"
+    users_file: str = "/etc/odooguard/web/users"
+    secret_file: str = "/etc/odooguard/web/secret"
+    session_hours: float = 8.0
+    public_status: str = "/var/lib/odooguard-public/status.json"
+
+
+@dataclass
 class Config:
     path: str
     site: str = "LNHC"
@@ -106,6 +150,9 @@ class Config:
 
     targets: dict[str, Target] = field(default_factory=dict)
     destinations: dict[str, Destination] = field(default_factory=dict)
+    externals: dict[str, External] = field(default_factory=dict)
+    alerts: AlertSettings = field(default_factory=AlertSettings)
+    web: WebSettings = field(default_factory=WebSettings)
 
     # ------------------------------------------------------------------ accès
     def target(self, name: str) -> Target:
@@ -254,6 +301,33 @@ def load(path: str | None = None, *, strict_perms: bool = True) -> Config:
         "copy": r.int("thresholds", "copy_max_age", 3 * 3600),
     }
 
+    a = cfg.alerts
+    a.channels = _split(r.get("alerts", "channels", "journal") or "journal")
+    a.min_level = r.get("alerts", "min_level", a.min_level)
+    a.repeat_hours = r.float("alerts", "repeat_hours", a.repeat_hours)
+    a.send_resolved = r.bool("alerts", "send_resolved", True)
+    a.smtp_host = r.get("smtp", "host", "") or ""
+    a.smtp_port = r.int("smtp", "port", a.smtp_port)
+    a.smtp_security = r.get("smtp", "security", a.smtp_security)
+    a.smtp_user = r.get("smtp", "user", "") or ""
+    a.smtp_password_file = r.get("smtp", "password_file", "") or ""
+    a.mail_from = r.get("smtp", "from", "") or ""
+    a.mail_to = _split(r.get("smtp", "to", "") or "")
+    a.telegram_token_file = r.get("telegram", "token_file", "") or ""
+    a.telegram_chat_ids = _split(r.get("telegram", "chat_ids", "") or "")
+    a.telegram_api = r.get("telegram", "api", a.telegram_api)
+    a.https_proxy = r.get("telegram", "https_proxy", "") or ""
+
+    w = cfg.web
+    w.listen = r.get("web", "listen", w.listen)
+    w.port = r.int("web", "port", w.port)
+    w.certfile = r.get("web", "certfile", w.certfile)
+    w.keyfile = r.get("web", "keyfile", w.keyfile)
+    w.users_file = r.get("web", "users_file", w.users_file)
+    w.secret_file = r.get("web", "secret_file", w.secret_file)
+    w.session_hours = r.float("web", "session_hours", w.session_hours)
+    w.public_status = r.get("web", "public_status", w.public_status)
+
     for section in cp.sections():
         if section.startswith("target:"):
             name = section.split(":", 1)[1]
@@ -266,6 +340,15 @@ def load(path: str | None = None, *, strict_perms: bool = True) -> Config:
                 mountpoint=r.get(section, "mountpoint", "") or "",
                 min_free_gb=r.float(section, "min_free_gb", 100.0),
                 restic_password_file=r.get(section, "restic_password_file", "") or "",
+                enabled=r.bool(section, "enabled", True),
+            )
+        elif section.startswith("external:"):
+            name = section.split(":", 1)[1]
+            cfg.externals[name] = External(
+                name=name,
+                label=r.get(section, "label", name) or name,
+                max_age=r.int(section, "max_age", 26 * 3600),
+                token_file=r.get(section, "token_file", "") or "",
                 enabled=r.bool(section, "enabled", True),
             )
     return cfg

@@ -91,13 +91,16 @@ Les deux maxima doivent être ≤ 1 h. Joindre la sortie au dossier de recette.
 | NAS absent | `sudo umount -l /mnt/nas-odoo` (ou couper le partage) | `nas:nas1` critique au contrôle suivant ; `copy:nas1` en échec catégorie `mount` | ≤ 5 min |
 | Erreur d'E/S | NAS en lecture seule, ou quota plein côté NAS | test d'écriture et relecture → catégorie `io` | ≤ 5 min |
 | Disque plein | `fallocate -l <taille> /srv/odooguard/remplissage` jusqu'à < `min_free_gb` | `disk:repo` critique ; la sauvegarde suivante refuse de démarrer (`space`) | ≤ 5 min |
+| Chaîne d'alerte en panne | `sudo odooguard alert-test` après avoir faussé `[smtp] host` et le jeton Telegram | composant `alerting` critique sur le tableau de bord et dans Zabbix | ≤ 5 min |
+| Veeam en échec / muet | désactiver la tâche planifiée Veeam ou provoquer l'échec d'un travail | `ext:veeam` critique | rapport suivant, ou 26 h sans rapport |
 | Sauvegarde base en erreur | `sudo systemctl stop odooguard-walingest`, puis `systemctl start odooguard-backup-db@incr` | échec `archive-timeout` → `OnFailure` → alerte | ≤ 10 min |
 | Flux WAL coupé | `sudo systemctl stop odooguard-walreceiver` | `wal` critique dès 10 min de retard | ≤ 15 min |
 | server01 injoignable | couper le réseau de server01 sur une VM de test | échec des sauvegardes et retard WAL | ≤ 15 min |
 
 Pour chaque scénario :
 - noter l'heure de provocation et l'heure de l'alerte. En phase 1, l'alerte est dans
-  `journalctl -t odooguard-alert` ; en phase 2, e-mail et Telegram ;
+  l'heure de réception de l'e-mail ou du message Telegram (l'heure exacte d'envoi figure dans
+  la page « Alertes » du tableau de bord et dans `journalctl -t odooguard-alert`) ;
 - vérifier avec `odooguard list` qu'aucune sauvegarde ou copie n'a été ajoutée pendant
   l'incident ;
 - remettre en état et vérifier le retour à OK.

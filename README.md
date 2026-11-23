@@ -28,6 +28,10 @@ odooguard verify [--level quick|full] [--dest nas1]
 odooguard status [--json] [--check] [--record] [--rpo-report 7d]
 odooguard wal-ingest [--once|--refresh-shadow|--finalize-partial]
 odooguard init | maintenance
+odooguard web | web-user add|remove|list <nom>     tableau de bord (phase 2)
+odooguard alert-test [--level critical]            message de test sur tous les canaux
+odooguard report <veeam|offline> --status success|warning|failed [--message ...]
+odooguard-zabbix discovery|overall|age|rpo db|files|component <nom> <champ>
 ```
 
 `T` accepte `"2026-11-22 14:30"`, `"hier 14:30"` ou `"-2h"`. Toute opération destructive
@@ -43,6 +47,7 @@ exige `--force` et la saisie du nom exact (ou `--confirm`). Elle est journalisé
 | [docs/restauration.md](docs/restauration.md) | procédures avec **et sans** OdooGuard, à imprimer |
 | [docs/retour-arriere-phase1.md](docs/retour-arriere-phase1.md) | retour arrière |
 | [docs/tests-et-recette.md](docs/tests-et-recette.md) | tests automatisés et recette des critères d'acceptation |
+| [docs/installation-phase2.md](docs/installation-phase2.md) | tableau de bord, alertes e-mail et Telegram, Zabbix, Veeam et copie G:\, retour arrière |
 
 ## Arborescence
 
@@ -54,7 +59,11 @@ odooguard/            application Python (bibliothèque standard uniquement en p
   dest.py             copies NAS : montage, test d'écriture et relecture, copie, vérification
   restore.py          restaurations (instance temporaire, transfert, neutralisation)
   status.py           état global, mesure de la perte de données
-  history.py audit.py config.py util.py notify.py remote.py
+  notify.py           alertes : journal, e-mail, Telegram, anti-rafale
+  external.py         rapports Veeam / copie G:\
+  zabbix.py           indicateurs Zabbix (autonome, sans secret)
+  web/                tableau de bord : app.py, auth.py, charts.py, templates/, static/
+  history.py audit.py config.py util.py remote.py
 server/               installé sur server01 et la VM de test
   odooguard-agent       agent root à liste blanche (commande forcée SSH)
   odooguard-pgbr-gate   filtre SSH : protocole pgBackRest uniquement
@@ -63,6 +72,8 @@ conf/                 modèles de configuration (aucun secret)
 deploy/systemd/       services et timers
 install/              scripts d'installation OdooGuard et server01
 tests/                tests unitaires + tests/integration/lab.sh (bout en bout)
+deploy/zabbix/        UserParameter + modèle Zabbix
+deploy/windows/       scripts PowerShell (Veeam, rapport générique)
 tools/mesure-impact.py  mesure de l'impact sur le temps de réponse d'Odoo
 ```
 
@@ -74,9 +85,10 @@ Aucun secret dans Git. Ils sont générés à l'installation dans `/etc/odooguar
 
 ## Feuille de route
 
-- **Phase 1 (cette livraison)** : socle pgBackRest + WAL pull + restic + CLI + procédures.
-- Phase 2 : tableau de bord web (FastAPI, Jinja2, htmx), alertes e-mail et Telegram
-  (branchées sur `notify.py`), intégration Zabbix (`status.json`), état Veeam.
+- **Phase 1 (livrée)** : socle pgBackRest + WAL pull + restic + CLI + procédures.
+- **Phase 2 (livrée)** : tableau de bord web HTTPS (FastAPI, Jinja2, htmx servi en local),
+  alertes e-mail et Telegram sans rafale, intégration Zabbix (modèle + découverte),
+  état Veeam et copie hors ligne via rapports PowerShell.
 - Phase 3 : assistant de restauration web, test de restauration hebdomadaire automatique
   sur la VM de test, avec rapport.
 - Phase 3 bis : script PowerShell de copie hors ligne vers G:\ adapté aux dépôts OdooGuard.

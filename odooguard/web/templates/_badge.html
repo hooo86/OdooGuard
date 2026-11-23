@@ -1,0 +1,3 @@
+{%- macro badge(level) -%}
+<span class="badge badge-{{ level }}"><span aria-hidden="true">{{ LEVEL_ICON.get(level, '?') }}</span> {{ LEVEL_FR.get(level, level) }}</span>
+{%- endmacro -%}

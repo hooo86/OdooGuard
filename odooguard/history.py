@@ -40,6 +40,43 @@ CREATE TABLE IF NOT EXISTS metrics (
 );
 CREATE INDEX IF NOT EXISTS metrics_name ON metrics(name, ts);
 
+-- État des alertes (anti-rafale) : une ligne par problème suivi
+CREATE TABLE IF NOT EXISTS alerts (
+    key         TEXT PRIMARY KEY,       -- composant (db, nas:nas1...) ou unit:<nom>
+    level       TEXT NOT NULL,          -- warning / critical / ok (résolu)
+    message     TEXT,
+    first_seen  REAL NOT NULL,
+    last_sent   REAL,
+    sent_count  INTEGER NOT NULL DEFAULT 0,
+    resolved_at REAL
+);
+
+-- Journal des notifications envoyées (ou en échec d'envoi)
+CREATE TABLE IF NOT EXISTS notifications (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts       REAL NOT NULL,
+    key      TEXT,
+    level    TEXT,
+    title    TEXT,
+    channels TEXT,                      -- JSON {canal: "ok" | "erreur ..."}
+    body     TEXT
+);
+
+-- Rapports envoyés par les composants extérieurs (Veeam, copie hors ligne vers G:)
+CREATE TABLE IF NOT EXISTS external_reports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    received_at REAL NOT NULL,
+    status      TEXT NOT NULL,          -- success / warning / failed
+    finished_at REAL,
+    size_bytes  INTEGER,
+    duration_s  REAL,
+    message     TEXT,
+    details     TEXT,
+    source_ip   TEXT
+);
+CREATE INDEX IF NOT EXISTS external_name ON external_reports(name, received_at);
+
 CREATE TABLE IF NOT EXISTS audit (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     ts       REAL NOT NULL,
@@ -147,6 +184,63 @@ class History:
     def purge_metrics(self, older_than: float) -> None:
         with self._conn() as c:
             c.execute("DELETE FROM metrics WHERE ts < ?", (older_than,))
+
+    # ------------------------------------------------------------ alertes
+    def alert_get(self, key: str) -> dict | None:
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM alerts WHERE key=?", (key,)).fetchone()
+            return dict(row) if row else None
+
+    def alert_put(self, key: str, **fields: Any) -> None:
+        cur = self.alert_get(key)
+        with self._conn() as c:
+            if cur is None:
+                fields.setdefault("first_seen", time.time())
+                cols = ["key", *fields]
+                c.execute(f"INSERT INTO alerts({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                          [key, *fields.values()])
+            elif fields:
+                sets = ", ".join(f"{k}=?" for k in fields)
+                c.execute(f"UPDATE alerts SET {sets} WHERE key=?", [*fields.values(), key])
+
+    def alerts_active(self) -> list[dict]:
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM alerts WHERE resolved_at IS NULL ORDER BY first_seen")]
+
+    def notification_log(self, key: str, level: str, title: str, channels: dict, body: str) -> None:
+        with self._conn() as c:
+            c.execute("INSERT INTO notifications(ts, key, level, title, channels, body) VALUES (?,?,?,?,?,?)",
+                      (time.time(), key, level, title, json.dumps(channels, ensure_ascii=False), body[:4000]))
+
+    def notifications(self, limit: int = 50) -> list[dict]:
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM notifications ORDER BY ts DESC LIMIT ?", (limit,))]
+
+    # ------------------------------------------------------------ rapports extérieurs
+    def external_add(self, name: str, status: str, *, finished_at: float | None, size: int | None,
+                     duration: float | None, message: str, details: dict, source_ip: str) -> None:
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO external_reports(name, received_at, status, finished_at, size_bytes,"
+                " duration_s, message, details, source_ip) VALUES (?,?,?,?,?,?,?,?,?)",
+                (name, time.time(), status, finished_at, size, duration, message[:2000],
+                 json.dumps(details, ensure_ascii=False, default=str)[:20000], source_ip))
+
+    def external_last(self, name: str, status: str | None = None) -> dict | None:
+        q = "SELECT * FROM external_reports WHERE name=?"
+        args: list[Any] = [name]
+        if status:
+            q += " AND status=?"
+            args.append(status)
+        with self._conn() as c:
+            row = c.execute(q + " ORDER BY received_at DESC LIMIT 1", args).fetchone()
+            return dict(row) if row else None
+
+    def audit_recent(self, limit: int = 100) -> list[dict]:
+        with self._conn() as c:
+            return [dict(r) for r in c.execute("SELECT * FROM audit ORDER BY ts DESC LIMIT ?", (limit,))]
 
     # ------------------------------------------------------------ audit
     def audit(self, action: str, target: str, outcome: str, details: dict | None = None) -> None:

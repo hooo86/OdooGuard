@@ -15,8 +15,8 @@ def cfg(tmp_path):
     """Configuration d'exemple pointant vers un répertoire temporaire."""
     src = os.path.join(ROOT, "conf", "odooguard.conf.example")
     text = open(src, encoding="utf-8").read()
-    for old in ("/srv/odooguard", "/var/lib/odooguard", "/var/log/odooguard", "/run/odooguard",
-                "/mnt/nas-odoo", "/mnt/nas-backups"):
+    for old in ("/srv/odooguard", "/var/lib/odooguard-public", "/var/lib/odooguard", "/var/log/odooguard",
+                "/run/odooguard", "/mnt/nas-odoo", "/mnt/nas-backups", "/etc/odooguard"):
         text = text.replace(old, str(tmp_path) + old)
     path = tmp_path / "odooguard.conf"
     path.write_text(text, encoding="utf-8")
