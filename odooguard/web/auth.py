@@ -1,8 +1,10 @@
 """Authentification locale du tableau de bord (bibliothèque standard uniquement).
 
 * Comptes dans ``/etc/odooguard/web/users`` (600, propriétaire odooguard) :
-  une ligne par compte ``nom:pbkdf2_sha256$<itérations>$<sel b64>$<empreinte b64>``.
-  Gestion : ``odooguard web-user add|remove|list``.
+  une ligne par compte ``nom:rôle:pbkdf2_sha256$<itérations>$<sel b64>$<empreinte b64>``
+  (rôles : lecteur, operateur, admin ; une ligne sans rôle, format de la
+  phase 2, vaut « lecteur »).
+  Gestion : ``odooguard web-user add|role|remove|list``.
 * Session : cookie signé HMAC-SHA256 (clé ``/etc/odooguard/web/secret``),
   ``HttpOnly``, ``Secure``, ``SameSite=Strict``, durée limitée.
 * Anti-force brute : 5 échecs par adresse IP en 10 min bloquent la connexion
@@ -49,29 +51,57 @@ def verify_password(password: str, encoded: str) -> bool:
         return False
 
 
-def read_users(path: str) -> dict[str, str]:
-    users: dict[str, str] = {}
+ROLES = ("lecteur", "operateur", "admin")
+
+
+def read_accounts(path: str) -> dict[str, dict]:
+    accounts: dict[str, dict] = {}
     try:
         with open(path, encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
-                if line and not line.startswith("#") and ":" in line:
-                    name, _, h = line.partition(":")
-                    users[name] = h
+                if not line or line.startswith("#") or ":" not in line:
+                    continue
+                parts = line.split(":")
+                if len(parts) == 2:
+                    accounts[parts[0]] = {"role": "lecteur", "hash": parts[1]}
+                elif len(parts) == 3 and parts[1] in ROLES:
+                    accounts[parts[0]] = {"role": parts[1], "hash": parts[2]}
     except FileNotFoundError:
         pass
-    return users
+    return accounts
 
 
-def write_users(path: str, users: dict[str, str]) -> None:
+def write_accounts(path: str, accounts: dict[str, dict]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write("# Comptes du tableau de bord OdooGuard - géré par « odooguard web-user »\n")
-        for name, h in sorted(users.items()):
-            fh.write(f"{name}:{h}\n")
+        for name, a in sorted(accounts.items()):
+            fh.write(f"{name}:{a['role']}:{a['hash']}\n")
     os.replace(tmp, path)
+
+
+def read_users(path: str) -> dict[str, str]:
+    """Compatibilité : nom -> empreinte."""
+    return {n: a["hash"] for n, a in read_accounts(path).items()}
+
+
+def write_users(path: str, users: dict[str, str], role: str = "lecteur") -> None:
+    """Compatibilité : conserve le rôle des comptes existants."""
+    current = read_accounts(path)
+    write_accounts(path, {n: {"role": current.get(n, {}).get("role", role), "hash": h}
+                          for n, h in users.items()})
+
+
+def csrf_token(secret: bytes, session: str) -> str:
+    """Jeton anti-CSRF lié à la session (formulaires de l'assistant)."""
+    return _b64(hmac.new(secret, b"csrf|" + session.encode(), hashlib.sha256).digest())
+
+
+def check_csrf(secret: bytes, session: str | None, token: str | None) -> bool:
+    return bool(session and token) and hmac.compare_digest(csrf_token(secret, session), token)
 
 
 def valid_username(name: str) -> bool:

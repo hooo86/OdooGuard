@@ -25,13 +25,21 @@ from odooguard.util import OdooGuardError
 log = logging.getLogger("odooguard")
 
 
+def actor_name() -> str:
+    """Auteur réel : utilisateur web (travaux), sinon utilisateur sudo, sinon compte courant."""
+    web = os.environ.get("ODOOGUARD_ACTOR")
+    if web:
+        return f"web:{web}"
+    return os.environ.get("SUDO_USER") or getpass.getuser()
+
+
 class Auditor:
     def __init__(self, history: History, audit_log: str):
         self.history = history
         self.audit_log = audit_log
 
     def record(self, action: str, target: str, outcome: str, /, **details) -> None:
-        actor = os.environ.get("SUDO_USER") or getpass.getuser()
+        actor = actor_name()
         entry = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "actor": actor,

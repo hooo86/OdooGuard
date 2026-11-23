@@ -107,8 +107,22 @@ Pour chaque scénario :
 
 ### R4 — Test de restauration hebdomadaire
 
-Livré en phase 3 (automatisation et rapport). En phase 1 : R1 exécuté à la main chaque
-semaine pendant la période de recette.
+`odooguard-restore-test.timer` (samedi 06:30) restaure `LNHC_Prod_2025` sur la VM de test à
+« hier 16:00 ». Il contrôle :
+- l'arrêt au bon instant et la fraîcheur des données ;
+- les comptages comparés à la production ;
+- 200 pièces jointes ;
+- la neutralisation ;
+- le démarrage d'Odoo et la réponse de `/web/login`.
+
+Le rapport part par e-mail et Telegram. Critère : un rapport « RÉUSSI » reçu chaque samedi
+pendant la période de recette, et consultable dans « Tests de restauration ». Les durées
+du rapport fournissent la mesure du temps de reprise. Le test R1 est le même avec un
+instant choisi à la main :
+
+```bash
+sudo odooguard restore-test --time "hier 15:13"
+```
 
 ### R5 — Impact imperceptible pour les utilisateurs
 

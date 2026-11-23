@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Erreur{% endblock %}
+{% block content %}
+<p class="banner banner-critical" role="alert">{{ message }}</p>
+<p><a href="/restore">Assistant de restauration</a> · <a href="/">Tableau de bord</a></p>
+{% endblock %}

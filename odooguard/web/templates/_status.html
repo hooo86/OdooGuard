@@ -14,12 +14,12 @@
     </div>
     <div class="hero-kpi">
       <div class="label">Perte de données max. — base</div>
-      <div class="kpi">{{ fmt_age(st.rpo.db_seconds) }}</div>
+      <div class="kpi">{{ fmt_age(st.rpo.get('db_seconds')) }}</div>
       <div class="muted">objectif ≤ 1 h</div>
     </div>
     <div class="hero-kpi">
       <div class="label">Perte de données max. — fichiers</div>
-      <div class="kpi">{{ fmt_age(st.rpo.files_seconds) }}</div>
+      <div class="kpi">{{ fmt_age(st.rpo.get('files_seconds')) }}</div>
       <div class="muted">objectif ≤ 1 h</div>
     </div>
     <div class="hero-kpi">

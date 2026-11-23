@@ -1,4 +1,4 @@
-"""Faux services pour le laboratoire : serveur SMTP (port 2525) et API Telegram (port 8081).
+"""Faux services pour le laboratoire : SMTP (2525), API Telegram (8081), Odoo /web/login (8069).
 
 Les messages reçus sont écrits dans le répertoire passé en argument
 (mail-*.eml, telegram-*.txt) pour que lab.sh puisse les compter.
@@ -70,8 +70,29 @@ class TelegramHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class OdooHandler(http.server.BaseHTTPRequestHandler):
+    """Faux Odoo : /web/login renvoie un formulaire de connexion."""
+
+    def do_GET(self):
+        if self.path.startswith("/web/login"):
+            body = b'<html><form><input name="login"/><input name="password"/></form></html>'
+            self.send_response(200)
+        else:
+            body = b"not found"
+            self.send_response(404)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
 socketserver.ThreadingTCPServer.allow_reuse_address = True
 smtp = socketserver.ThreadingTCPServer(("127.0.0.1", 2525), SMTPHandler)
 tg = http.server.ThreadingHTTPServer(("127.0.0.1", 8081), TelegramHandler)
 threading.Thread(target=smtp.serve_forever, daemon=True).start()
+http.server.ThreadingHTTPServer.allow_reuse_address = True
+odoo = http.server.ThreadingHTTPServer(("127.0.0.1", 8069), OdooHandler)
+threading.Thread(target=odoo.serve_forever, daemon=True).start()
 tg.serve_forever()

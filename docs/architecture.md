@@ -137,6 +137,8 @@ point de défaillance.
 | `odooguard-verify-full.timer` | samedi 13:00 | relecture intégrale (`pgbackrest verify`, restic 100 %) |
 | `odooguard-maintenance.timer` | dimanche 05:00 | rétention restic (`forget --prune`) |
 | `odooguard-status.timer` | toutes les 5 min | état, mesure du RPO, alertes |
+| `odooguard-restore-test.timer` | samedi 06:30 | test de restauration complet sur la VM de test, rapport (phase 3) |
+| `odooguard-web.service` / `odooguard-jobs.service` | permanents | tableau de bord ; exécution des demandes de l'assistant (phases 2 et 3) |
 
 Toute unité en échec déclenche `odooguard-notify@<unité>` (`OnFailure=`) : l'alerte part
 immédiatement. Le contrôle toutes les 5 min détecte en plus un NAS absent, un montage

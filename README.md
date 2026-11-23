@@ -30,6 +30,9 @@ odooguard wal-ingest [--once|--refresh-shadow|--finalize-partial]
 odooguard init | maintenance
 odooguard web | web-user add|remove|list <nom>     tableau de bord (phase 2)
 odooguard alert-test [--level critical]            message de test sur tous les canaux
+odooguard restore-test [--db X] [--time T]         test de restauration complet + rapport (phase 3)
+odooguard web-user role <nom> lecteur|operateur|admin
+odooguard jobs-worker                              (service) exécute les demandes de l'assistant web
 odooguard report <veeam|offline> --status success|warning|failed [--message ...]
 odooguard-zabbix discovery|overall|age|rpo db|files|component <nom> <champ>
 ```
@@ -47,6 +50,7 @@ exige `--force` et la saisie du nom exact (ou `--confirm`). Elle est journalisé
 | [docs/restauration.md](docs/restauration.md) | procédures avec **et sans** OdooGuard, à imprimer |
 | [docs/retour-arriere-phase1.md](docs/retour-arriere-phase1.md) | retour arrière |
 | [docs/tests-et-recette.md](docs/tests-et-recette.md) | tests automatisés et recette des critères d'acceptation |
+| [docs/installation-phase3.md](docs/installation-phase3.md) | VM de test isolée, test de restauration hebdomadaire, assistant de restauration web, rôles |
 | [docs/installation-phase2.md](docs/installation-phase2.md) | tableau de bord, alertes e-mail et Telegram, Zabbix, Veeam et copie G:\, retour arrière |
 
 ## Arborescence
@@ -58,6 +62,8 @@ odooguard/            application Python (bibliothèque standard uniquement en p
   files.py            rsync (miroir) + restic
   dest.py             copies NAS : montage, test d'écriture et relecture, copie, vérification
   restore.py          restaurations (instance temporaire, transfert, neutralisation)
+  restoretest.py      test de restauration hebdomadaire et son rapport
+  jobs.py             file des demandes web, rôles, re-validation, exécution
   status.py           état global, mesure de la perte de données
   notify.py           alertes : journal, e-mail, Telegram, anti-rafale
   external.py         rapports Veeam / copie G:\
@@ -89,6 +95,8 @@ Aucun secret dans Git. Ils sont générés à l'installation dans `/etc/odooguar
 - **Phase 2 (livrée)** : tableau de bord web HTTPS (FastAPI, Jinja2, htmx servi en local),
   alertes e-mail et Telegram sans rafale, intégration Zabbix (modèle + découverte),
   état Veeam et copie hors ligne via rapports PowerShell.
-- Phase 3 : assistant de restauration web, test de restauration hebdomadaire automatique
-  sur la VM de test, avec rapport.
+- **Phase 3 (livrée)** : test de restauration hebdomadaire automatique sur la VM de test
+  (instant précis, neutralisation, comptages comparés à la production, pièces jointes,
+  /web/login), rapport envoyé ; assistant de restauration web avec rôles, confirmation
+  et audit, exécuté par le service odooguard-jobs.
 - Phase 3 bis : script PowerShell de copie hors ligne vers G:\ adapté aux dépôts OdooGuard.

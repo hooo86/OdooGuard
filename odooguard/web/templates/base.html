@@ -18,17 +18,19 @@
     <a href="/" {% if request.url.path == '/' %}aria-current="page"{% endif %}>État</a>
     <a href="/backups" {% if request.url.path == '/backups' %}aria-current="page"{% endif %}>Sauvegardes</a>
     <a href="/history" {% if request.url.path == '/history' %}aria-current="page"{% endif %}>Historique</a>
+    <a href="/restore-tests" {% if request.url.path.startswith('/restore-tests') %}aria-current="page"{% endif %}>Tests de restauration</a>
+    {% if role in ('operateur', 'admin') %}<a href="/restore" {% if request.url.path.startswith('/restore') and not request.url.path.startswith('/restore-tests') %}aria-current="page"{% endif %}>Restaurer</a>{% endif %}
     <a href="/alerts" {% if request.url.path == '/alerts' %}aria-current="page"{% endif %}>Alertes</a>
     <a href="/audit" {% if request.url.path == '/audit' %}aria-current="page"{% endif %}>Audit</a>
   </nav>
   <form method="post" action="/logout" class="logout">
-    <span class="muted">{{ user }}</span> <button type="submit" class="link">Déconnexion</button>
+    <span class="muted">{{ user }} · {{ role }}</span> <button type="submit" class="link">Déconnexion</button>
   </form>
 </header>
 {% endif %}
 <main>
 {% block content %}{% endblock %}
 </main>
-<footer class="muted">OdooGuard {{ version }} · lecture seule — aucune action n'est lancée depuis cette page</footer>
+<footer class="muted">OdooGuard {{ version }} · les restaurations sont exécutées par le service odooguard-jobs et tracées dans le journal d'audit</footer>
 </body>
 </html>

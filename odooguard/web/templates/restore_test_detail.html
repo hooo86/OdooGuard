@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% from "_badge.html" import badge %}
+{% block title %}Rapport de test{% endblock %}
+{% block content %}
+<h1>Test de restauration du {{ fmt_time(r.started_at) }} {{ badge(r.level) }}</h1>
+<p>Instant restauré : <strong>{{ r.point[:19].replace('T', ' ') }}</strong> · cible {{ r.target }} · durée {{ fmt_age(r.ended_at - r.started_at) }}</p>
+{% for d in r.databases %}
+<h2>{{ d.db }} → <code>{{ d.test_db }}</code> {{ badge(d.level) }}</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Contrôle</th><th>Résultat</th><th>Détail</th></tr></thead>
+  <tbody>
+  {% for c in d.checks %}<tr><th scope="row">{{ c.name }}</th><td>{{ badge(c.level) }}</td><td class="msg">{{ c.detail }}</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+{% if d.control %}
+<h3>Comptages</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>Indicateur</th><th>Base restaurée</th><th>Production (aujourd'hui)</th></tr></thead>
+  <tbody>
+  {% for k, val in d.control.items() %}<tr><th scope="row">{{ k }}</th><td class="num">{{ '—' if val is none else val }}</td><td class="num">{% set pv = (d.control_production or {}).get(k) %}{{ '—' if pv is none else pv }}</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+{% endif %}
+{% if d.durations %}<p class="muted">Durées : {% for k, v in d.durations.items() if v is not none %}{{ k.replace('_s', '').replace('_', ' ') }} {{ fmt_age(v) }}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+{% endfor %}
+<details><summary>Rapport texte (tel qu'envoyé)</summary><pre>{{ text }}</pre></details>
+{% endblock %}

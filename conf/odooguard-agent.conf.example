@@ -9,3 +9,5 @@ FILESTORE=/var/lib/odoo/.local/share/Odoo/filestore
 # réinstaller, avec propriétaire:groupe à appliquer. [À VÉRIFIER : modules]
 IMPORT_PATHS="/etc/odoo:odoo:odoo /opt/odoo/custom-addons:odoo:odoo /var/lib/odoo/.local/share/Odoo/filestore:odoo:odoo"
 RECOVERY_TIMEOUT=21600
+# VM de test UNIQUEMENT : autorise la suppression des bases ogtest_* (tests de restauration)
+ALLOW_TEST_DROP=no

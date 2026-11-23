@@ -27,6 +27,9 @@
 #   odoo-start | odoo-stop | odoo-status
 #   pg-restore-cluster VER CLUSTER STANZA HORODATAGE|latest
 #   create-slot VER CLUSTER        (re)crée le slot de réplication « odooguard »
+#   db-list-test                   bases de test « ogtest_* » (JSON)          [VM de test]
+#   db-drop-test NOM               supprime une base de test « ogtest_* »     [VM de test]
+#                                  et son filestore ; refusé sauf ALLOW_TEST_DROP=yes
 # =============================================================================
 set -euo pipefail
 umask 027
@@ -44,6 +47,8 @@ APPNAME=odooguard
 # Chemins réinstallables par fs-import : "chemin:propriétaire:groupe" séparés par des espaces
 IMPORT_PATHS="/etc/odoo:odoo:odoo"
 RECOVERY_TIMEOUT=21600
+# Seule la VM de test met ALLOW_TEST_DROP=yes : jamais sur server01.
+ALLOW_TEST_DROP=no
 # shellcheck source=/dev/null
 [[ -r "$CONF" ]] && . "$CONF"
 
@@ -121,7 +126,10 @@ select json_build_object(
   'attachments_in_filestore', (select count(*) from ir_attachment where store_fname is not null),
   'last_write',   (select max(write_date) from res_partner),
   'neutralized',  (select value from ir_config_parameter where key = 'database.is_neutralized'),
-  'modules_installed', (select count(*) from ir_module_module where state = 'installed'))
+  'modules_installed', (select count(*) from ir_module_module where state = 'installed'),
+  'last_activity', (select case when to_regclass('mail_message') is null then
+                      (select max(write_date) from res_partner) else
+                      (xpath('/row/c/text()', query_to_xml('select max(create_date) as c from mail_message', false, true, '')))[1]::text::timestamp end))
 SQL
 )
     # Lisibilité des pièces jointes : échantillon de 200 fichiers au hasard
@@ -136,6 +144,23 @@ import json, sys
 r = json.loads(sys.argv[1]); r["attachments_sampled"] = int(sys.argv[2]); r["attachments_missing"] = int(sys.argv[3])
 print(json.dumps(r))
 PY
+    ;;
+db-list-test)
+    [[ "$ALLOW_TEST_DROP" == "yes" ]] || die "db-list-test réservé à la VM de test (ALLOW_TEST_DROP=yes)"
+    psql_q <<< "select coalesce(json_agg(datname order by datname), '[]') from pg_database where datname like 'ogtest\_%'" \
+        | python3 -c 'import json,sys; print(json.dumps({"databases": json.loads(sys.stdin.read() or "[]")}))'
+    ;;
+db-drop-test)
+    [[ "$ALLOW_TEST_DROP" == "yes" ]] || die "db-drop-test réservé à la VM de test (ALLOW_TEST_DROP=yes)"
+    valid_db "$1"
+    [[ "$1" == ogtest_* ]] || die "seules les bases ogtest_* peuvent être supprimées"
+    log "suppression de la base de test $1"
+    if db_exists "$1"; then
+        terminate_db "$1"
+        as_pg dropdb "$1"
+    fi
+    [[ -d "$FILESTORE/$1" ]] && rm -rf -- "${FILESTORE:?}/$1"
+    echo "{\"dropped\": $(json_str "$1")}"
     ;;
 odoo-status)
     systemctl is-active "$ODOO_SERVICE" || true

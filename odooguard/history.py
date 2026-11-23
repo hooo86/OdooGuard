@@ -77,6 +77,22 @@ CREATE TABLE IF NOT EXISTS external_reports (
 );
 CREATE INDEX IF NOT EXISTS external_name ON external_reports(name, received_at);
 
+-- File de travaux demandés depuis le tableau de bord (assistant de restauration)
+CREATE TABLE IF NOT EXISTS jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  REAL NOT NULL,
+    user        TEXT NOT NULL,
+    role        TEXT NOT NULL,
+    kind        TEXT NOT NULL,          -- restore-db, restore-test
+    params      TEXT NOT NULL,          -- JSON
+    status      TEXT NOT NULL,          -- queued, running, success, failed, cancelled
+    started_at  REAL,
+    ended_at    REAL,
+    log_path    TEXT,
+    result      TEXT,                   -- JSON
+    error       TEXT
+);
+
 CREATE TABLE IF NOT EXISTS audit (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     ts       REAL NOT NULL,
@@ -238,13 +254,55 @@ class History:
             row = c.execute(q + " ORDER BY received_at DESC LIMIT 1", args).fetchone()
             return dict(row) if row else None
 
+    # ------------------------------------------------------------ travaux
+    def job_create(self, user: str, role: str, kind: str, params: dict) -> int:
+        with self._conn() as c:
+            cur = c.execute("INSERT INTO jobs(created_at, user, role, kind, params, status)"
+                            " VALUES (?,?,?,?,?, 'queued')",
+                            (time.time(), user, role, kind, json.dumps(params, ensure_ascii=False)))
+            return int(cur.lastrowid)
+
+    def job_get(self, job_id: int) -> dict | None:
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            return dict(row) if row else None
+
+    def job_claim(self) -> dict | None:
+        """Prend le plus ancien travail en attente (atomique)."""
+        with self._conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY id LIMIT 1").fetchone()
+            if row is None:
+                return None
+            c.execute("UPDATE jobs SET status='running', started_at=? WHERE id=?", (time.time(), row["id"]))
+            return dict(row)
+
+    def job_update(self, job_id: int, **fields: Any) -> None:
+        if not fields:
+            return
+        sets = ", ".join(f"{k}=?" for k in fields)
+        with self._conn() as c:
+            c.execute(f"UPDATE jobs SET {sets} WHERE id=?", [*fields.values(), job_id])
+
+    def jobs_recent(self, limit: int = 50) -> list[dict]:
+        with self._conn() as c:
+            return [dict(r) for r in c.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,))]
+
+    def jobs_fail_stale(self) -> int:
+        """Au démarrage du service : un travail « running » orphelin passe en échec."""
+        with self._conn() as c:
+            return c.execute("UPDATE jobs SET status='failed', ended_at=?, error="
+                             "'interrompu (redémarrage du service de travaux)' WHERE status='running'",
+                             (time.time(),)).rowcount
+
     def audit_recent(self, limit: int = 100) -> list[dict]:
         with self._conn() as c:
             return [dict(r) for r in c.execute("SELECT * FROM audit ORDER BY ts DESC LIMIT ?", (limit,))]
 
     # ------------------------------------------------------------ audit
     def audit(self, action: str, target: str, outcome: str, details: dict | None = None) -> None:
-        actor = os.environ.get("SUDO_USER") or getpass.getuser()
+        web = os.environ.get("ODOOGUARD_ACTOR")
+        actor = f"web:{web}" if web else (os.environ.get("SUDO_USER") or getpass.getuser())
         with self._conn() as c:
             c.execute(
                 "INSERT INTO audit(ts, actor, action, target, outcome, details) VALUES (?,?,?,?,?,?)",

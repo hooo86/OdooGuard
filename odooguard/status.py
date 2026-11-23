@@ -141,6 +141,18 @@ def compute(cfg: Config, history: History, *, query_source: bool = True) -> dict
         except OSError as exc:
             comps.append(_component(label, "critical", message=str(exc)))
 
+    # -------------------------------------------------- test de restauration hebdomadaire
+    ok_t = history.last("restore-test", status="success")
+    last_t = history.last("restore-test")
+    t_age = now - ok_t["ended_at"] if ok_t else None
+    t_level = _level_for_age(t_age, cfg.restore_test.max_age)
+    t_msg = (ok_t.get("message") or "réussi") if ok_t else "aucun test de restauration réussi"
+    if last_t and last_t["status"] == "failed":
+        t_level, t_msg = "critical", f"dernier test en échec : {(last_t.get('message') or '')[:300]}"
+    comps.append(_component("restore-test", t_level, age=t_age,
+                            duration=(ok_t["ended_at"] - ok_t["started_at"]) if ok_t else None,
+                            message=t_msg))
+
     # -------------------------------------------------- Veeam, copie hors ligne G:
     comps.extend(external.components(cfg, history, now))
 

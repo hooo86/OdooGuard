@@ -358,30 +358,68 @@ def cmd_web_user(ctx: Ctx) -> int:
 
     from odooguard.web import auth
     path = ctx.cfg.web.users_file
-    users = auth.read_users(path)
+    accounts = auth.read_accounts(path)
     a = ctx.args
     if a.action == "list":
-        for name in sorted(users):
-            print(name)
+        for name, acc in sorted(accounts.items()):
+            print(f"{name:<20} {acc['role']}")
         return 0
     if not auth.valid_username(a.name or ""):
         raise OdooGuardError("nom invalide (2 à 32 caractères : lettres, chiffres, . _ -)", "usage")
     if a.action == "remove":
-        if users.pop(a.name, None) is None:
+        if accounts.pop(a.name, None) is None:
             raise OdooGuardError(f"compte inconnu : {a.name}", "usage")
-        auth.write_users(path, users)
+        auth.write_accounts(path, accounts)
         ctx.auditor.record("web-user-remove", a.name, "success")
         print(f"compte {a.name} supprimé")
+        return 0
+    if a.action == "role":
+        if a.name not in accounts:
+            raise OdooGuardError(f"compte inconnu : {a.name}", "usage")
+        accounts[a.name]["role"] = a.role
+        auth.write_accounts(path, accounts)
+        ctx.auditor.record("web-user-role", a.name, "success", role=a.role)
+        print(f"compte {a.name} : rôle {a.role}")
         return 0
     pw = os.environ.get("ODOOGUARD_NEW_PASSWORD") or getpass.getpass("Mot de passe (12 caractères min.) : ")
     if len(pw) < 12:
         raise OdooGuardError("mot de passe trop court (12 caractères minimum)", "usage")
     if not os.environ.get("ODOOGUARD_NEW_PASSWORD") and getpass.getpass("Confirmation : ") != pw:
         raise OdooGuardError("les deux saisies diffèrent", "usage")
-    users[a.name] = auth.hash_password(pw)
-    auth.write_users(path, users)
-    ctx.auditor.record("web-user-set", a.name, "success")
-    print(f"compte {a.name} enregistré")
+    role = a.role or accounts.get(a.name, {}).get("role", "lecteur")
+    accounts[a.name] = {"role": role, "hash": auth.hash_password(pw)}
+    auth.write_accounts(path, accounts)
+    ctx.auditor.record("web-user-set", a.name, "success", role=role)
+    print(f"compte {a.name} enregistré (rôle {role})")
+    return 0
+
+
+def cmd_restore_test(ctx: Ctx) -> int:
+    """Test de restauration complet sur la VM de test, avec rapport."""
+    from odooguard.restoretest import RestoreTester, format_report
+    cfg = ctx.cfg
+    holder = {}
+
+    def job():
+        report = RestoreTester(cfg, ctx.auditor, ctx.history).run(
+            databases=ctx.args.db or None, point=ctx.args.time, send=not ctx.args.no_send)
+        holder["report"] = report
+        if report["level"] == "critical":
+            raise OdooGuardError("test de restauration en échec (rapport envoyé)", "restore-test")
+        return {"message": f"test {report['level']}", "label": os.path.basename(report["file"])}
+    try:
+        with file_lock(cfg.lock_dir, "restore", wait=ctx.args.wait):
+            tracked(ctx, "restore-test", "hebdo" if ctx.args.scheduled else "manuel", job, alert=False)
+    finally:
+        rep = holder.get("report")
+        if rep:
+            out(ctx, rep, format_report(rep))
+    return 0
+
+
+def cmd_jobs_worker(ctx: Ctx) -> int:
+    from odooguard.jobs import worker
+    worker(ctx.cfg, ctx.history, once=ctx.args.once)
     return 0
 
 
@@ -504,12 +542,25 @@ def build_parser() -> argparse.ArgumentParser:
     nf = sub.add_parser("notify-failure", help="(systemd OnFailure) alerter sur l'échec d'une unité")
     nf.add_argument("unit")
     nf.set_defaults(func=cmd_notify_failure)
+    rt = sub.add_parser("restore-test", help="test de restauration complet sur la VM de test")
+    rt.add_argument("--db", action="append", help="base à tester (défaut : [restore_test] databases)")
+    rt.add_argument("--time", help="instant restauré (défaut : [restore_test] point, « hier 16:00 »)")
+    rt.add_argument("--no-send", action="store_true", help="ne pas envoyer le rapport")
+    rt.add_argument("--scheduled", action="store_true", help=argparse.SUPPRESS)
+    rt.add_argument("--wait", type=float, default=0)
+    rt.add_argument("--json", action="store_true")
+    rt.set_defaults(func=cmd_restore_test)
+    jw = sub.add_parser("jobs-worker", help="(service) exécuter les travaux demandés depuis le web")
+    jw.add_argument("--once", action="store_true")
+    jw.set_defaults(func=cmd_jobs_worker)
     at = sub.add_parser("alert-test", help="envoyer un message de test sur tous les canaux")
     at.add_argument("--level", choices=["warning", "critical"], default="warning")
     at.set_defaults(func=cmd_alert_test)
     wu = sub.add_parser("web-user", help="comptes du tableau de bord")
-    wu.add_argument("action", choices=["add", "remove", "list"])
+    wu.add_argument("action", choices=["add", "role", "remove", "list"])
     wu.add_argument("name", nargs="?")
+    wu.add_argument("role", nargs="?", choices=["lecteur", "operateur", "admin"],
+                    help="rôle (add, role) : lecteur, operateur, admin")
     wu.set_defaults(func=cmd_web_user)
     wb = sub.add_parser("web", help="lancer le tableau de bord (service odooguard-web)")
     wb.set_defaults(func=cmd_web)

@@ -150,3 +150,23 @@ label = Copie hors ligne G:\
 # Copie hebdomadaire : 8 jours de tolérance [À AJUSTER au rythme réel]
 max_age = 691200
 token_file = /etc/odooguard/tokens/offline
+
+# ============================================================== phase 3
+# ----------------------------------------------------------------- test de restauration
+[restore_test]
+# Cible isolée : section [target:testvm] (jamais la production)
+target = testvm
+# Bases testées (vide = toutes celles de [odoo] databases)
+databases = LNHC_Prod_2025
+# Instant restauré : valide aussi la restauration à un instant précis (PITR)
+point = hier 16:00
+# Nombre de bases de test « ogtest_* » conservées sur la VM pour consultation
+keep_last = 1
+# Écart maximal des comptages de contrôle par rapport à la production (10 %)
+tolerance = 0.10
+# Dernière activité (messages Odoo) plus ancienne que N jours : avertissement
+max_staleness_days = 7
+start_odoo = yes
+http_timeout = 300
+# Critique si aucun test réussi depuis 8 jours
+max_age = 691200

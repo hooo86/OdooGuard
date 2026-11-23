@@ -1,0 +1,11 @@
+{% from "_badge.html" import badge %}
+<div class="table-wrap"><table>
+  <thead><tr><th>N°</th><th>Demandé</th><th>Par</th><th>Type</th><th>Paramètres</th><th>État</th></tr></thead>
+  <tbody>
+  {% for j in recent %}{% set p = j.params|fromjson %}
+    <tr><td><a href="/jobs/{{ j.id }}">{{ j.id }}</a></td><td class="nowrap">{{ fmt_time(j.created_at) }}</td><td>{{ j.user }}</td><td>{{ j.kind }}</td>
+      <td class="msg small">{% if p.db %}{{ p.db }} → {{ p.as_name }} ({{ p.target }}){% if p.when %}, {{ p.when[:16].replace('T', ' ') }}{% endif %}{% endif %}</td>
+      <td>{% if j.status == 'success' %}{{ badge('ok') }}{% elif j.status == 'failed' %}{{ badge('critical') }}{% else %}<span class="badge badge-unknown">… {{ {'queued': 'en attente', 'running': 'en cours'}.get(j.status, j.status) }}</span>{% endif %}</td></tr>
+  {% else %}<tr><td colspan="6" class="muted">Aucune demande.</td></tr>{% endfor %}
+  </tbody>
+</table></div>

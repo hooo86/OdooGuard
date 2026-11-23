@@ -10,6 +10,8 @@ opération et peut s'arrêter sans affecter les sauvegardes (systemd timers).
 
 from __future__ import annotations
 
+import datetime as dt
+import glob
 import json
 import logging
 import os
@@ -21,10 +23,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from odooguard import __version__, external
+from odooguard import __version__, external, jobs
 from odooguard.config import Config
 from odooguard.history import History
-from odooguard.util import fmt_age, fmt_size, fmt_time
+from odooguard.util import OdooGuardError, fmt_age, fmt_size, fmt_time
 from odooguard.web import auth
 from odooguard.web.charts import line_chart
 
@@ -37,6 +39,7 @@ COMPONENT_FR = {
     "wal": "Flux WAL (base, temps réel)", "db": "Base PostgreSQL (pgBackRest)",
     "files": "Filestore / modules / config (restic)", "alerting": "Chaîne d'alerte",
     "disk:repo": "Disque des dépôts", "disk:staging": "Zone de restauration",
+    "restore-test": "Test de restauration hebdomadaire",
 }
 
 
@@ -62,6 +65,7 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
     templates.env.globals.update(fmt_age=fmt_age, fmt_size=fmt_size, fmt_time=fmt_time,
                                  LEVEL_FR=LEVEL_FR, LEVEL_ICON=LEVEL_ICON, site=cfg.site,
                                  version=__version__, label=component_label)
+    templates.env.filters["fromjson"] = json.loads
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
     # ------------------------------------------------------------ outils
@@ -70,6 +74,9 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         if user and user in auth.read_users(cfg.web.users_file):
             return user
         return None
+
+    def role_of(user: str | None) -> str:
+        return auth.read_accounts(cfg.web.users_file).get(user or "", {}).get("role", "lecteur")
 
     def client_ip(request: Request) -> str:
         return request.client.host if request.client else "?"
@@ -87,8 +94,12 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         return st
 
     def page(request: Request, name: str, **ctx) -> HTMLResponse:
+        user = ctx.pop("user", None)
+        status = ctx.pop("status_code", 200)
+        session = request.cookies.get(auth.COOKIE) or ""
         return templates.TemplateResponse(
-            request, name, {"user": ctx.pop("user", None), "now_ts": time.time(), **ctx})
+            request, name, status_code=status, context={"user": user, "role": role_of(user), "now_ts": time.time(),
+                            "csrf": auth.csrf_token(secret, session) if session else "", **ctx})
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -251,6 +262,188 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         except (ValueError, external.ReportError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         return {"stored": True, "status": stored["status"]}
+
+    # ------------------------------------------------------------ phase 3 : assistant
+    def require(request: Request, needed: str, form_csrf: str | None = None):
+        """(utilisateur, rôle, réponse d'erreur éventuelle)."""
+        user, redirect = login_required(request)
+        if redirect:
+            return None, None, redirect
+        role = role_of(user)
+        if not jobs.can(role, needed):
+            return user, role, page(request, "error.html", user=user, status_code=403,
+                                    message=f"Cette page exige le rôle « {needed} » (vous : {role}).")
+        if form_csrf is not None and not auth.check_csrf(secret, request.cookies.get(auth.COOKIE), form_csrf):
+            return user, role, page(request, "error.html", user=user,
+                                    message="Jeton de formulaire invalide : recharger la page.")
+        return user, role, None
+
+    _window_cache: dict = {}
+
+    def pitr_window() -> tuple[float | None, str | None]:
+        """Fenêtre de restauration (plus ancienne sauvegarde -> maintenant), cache 60 s."""
+        if time.time() - _window_cache.get("ts", 0) < 60:
+            return _window_cache["val"]
+        val: tuple[float | None, str | None] = (None, None)
+        try:
+            from odooguard.pg import PgBackRest
+            info = PgBackRest(cfg).info()
+            val = (info.backups[0].stop if info.backups else None, None)
+        except Exception as exc:  # noqa: BLE001
+            val = (None, str(exc).splitlines()[0][:300])
+        _window_cache.update(ts=time.time(), val=val)
+        return val
+
+    def targets() -> list[dict]:
+        out = [{"name": "odoo", "label": f"server01 - PRODUCTION ({cfg.source.host})", "prod": True}]
+        out += [{"name": n, "label": f"{n} ({t.host})", "prod": t.is_production}
+                for n, t in cfg.targets.items()]
+        return out
+
+    def form_params(form: dict) -> dict:
+        when = None
+        if form.get("moment") == "instant":
+            raw = (form.get("when") or "").strip()
+            if not raw:
+                raise OdooGuardError("indiquer la date et l'heure à restaurer", "usage")
+            when = dt.datetime.fromisoformat(raw).astimezone().isoformat()
+        replace = form.get("mode") == "replace"
+        as_name = (form.get("db") or "") if replace else (form.get("as_name") or "").strip()
+        if not as_name:
+            stamp = dt.datetime.fromisoformat(when).strftime("%Y%m%d_%H%M") if when else \
+                time.strftime("%Y%m%d_%H%M")
+            as_name = f"{form.get('db')}_copie_{stamp}"
+        return {"db": form.get("db", ""), "as_name": as_name, "target": form.get("target", ""),
+                "when": when, "replace": replace, "neutralize": "auto",
+                "with_filestore": form.get("with_filestore") == "on",
+                "confirm": (form.get("confirm") or "").strip() or None}
+
+    @app.get("/restore", response_class=HTMLResponse)
+    def restore_form(request: Request):
+        user, role, err = require(request, "operateur")
+        if err:
+            return err
+        start, werr = pitr_window()
+        return page(request, "restore.html", user=user, databases=cfg.databases, targets=targets(),
+                    window_start=start, window_error=werr, form={}, error=None,
+                    recent=history.jobs_recent(10))
+
+    @app.post("/restore/preview", response_class=HTMLResponse)
+    async def restore_preview(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "operateur", form.get("csrf", ""))
+        if err:
+            return err
+        start, werr = pitr_window()
+        try:
+            params = form_params(form)
+            params["confirm"] = params["as_name"] if params["replace"] else None  # validé à l'étape suivante
+            v = jobs.validate_restore_params(cfg, role, params)
+            if v["when"] and start and v["when"].timestamp() < start:
+                raise OdooGuardError(f"instant antérieur à la plus ancienne sauvegarde ({fmt_time(start)})", "usage")
+            from odooguard.remote import Agent
+            exists = Agent(cfg.target(v["target"])).call_json("db-exists", v["as_name"]).get("exists", False)
+            if exists and not v["replace"]:
+                raise OdooGuardError(f"la base « {v['as_name']} » existe déjà sur la cible : choisir un autre nom", "usage")
+        except (OdooGuardError, ValueError) as exc:
+            return page(request, "restore.html", user=user, databases=cfg.databases, targets=targets(),
+                        window_start=start, window_error=werr, form=form, error=str(exc),
+                        recent=history.jobs_recent(10))
+        target = cfg.target(v["target"])
+        neutral = v["neutralize"] if v["neutralize"] is not None else not (target.is_production and v["as_name"] == v["db"])
+        return page(request, "restore_preview.html", user=user, v=v, target=target, exists=exists,
+                    neutral=neutral, params=json.dumps({**params, "confirm": None}))
+
+    @app.post("/restore/submit")
+    async def restore_submit(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "operateur", form.get("csrf", ""))
+        if err:
+            return err
+        try:
+            params = json.loads(form.get("params", "{}"))
+            params["confirm"] = (form.get("confirm") or "").strip() or None
+            jobs.validate_restore_params(cfg, role, params)
+        except (OdooGuardError, ValueError) as exc:
+            return page(request, "error.html", user=user, message=str(exc))
+        job_id = history.job_create(user, role, "restore-db", params)
+        history.audit("web-restore-request", f"{params['target']}:{params['as_name']}", "queued",
+                      {"job": job_id, "user": user, "db": params["db"], "when": params["when"],
+                       "replace": params["replace"], "ip": client_ip(request)})
+        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+    @app.post("/restore-tests/run")
+    async def restore_test_run(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "operateur", form.get("csrf", ""))
+        if err:
+            return err
+        job_id = history.job_create(user, role, "restore-test", {})
+        history.audit("web-restore-test-request", cfg.restore_test.target, "queued",
+                      {"job": job_id, "ip": client_ip(request)})
+        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+    def job_view(job_id: int) -> dict | None:
+        job = history.job_get(job_id)
+        if not job:
+            return None
+        job["params_d"] = json.loads(job["params"] or "{}")
+        job["result_d"] = json.loads(job["result"]) if job.get("result") else None
+        tail = ""
+        if job.get("log_path") and os.path.exists(job["log_path"]):
+            with open(job["log_path"], encoding="utf-8", errors="replace") as fh:
+                tail = "".join(fh.readlines()[-80:])
+        job["log_tail"] = tail
+        return job
+
+    @app.get("/jobs/{job_id}", response_class=HTMLResponse)
+    def job_page(request: Request, job_id: int):
+        user, role, err = require(request, "lecteur")
+        if err:
+            return err
+        job = job_view(job_id)
+        if not job:
+            return page(request, "error.html", user=user, message="Travail introuvable.")
+        return page(request, "job.html", user=user, job=job)
+
+    @app.get("/jobs/{job_id}/partial", response_class=HTMLResponse)
+    def job_partial(request: Request, job_id: int):
+        user, role, err = require(request, "lecteur")
+        if err:
+            return err
+        return page(request, "_job.html", user=user, job=job_view(job_id))
+
+    def reports(limit: int = 30) -> list[dict]:
+        out = []
+        for path in sorted(glob.glob(os.path.join(cfg.state_dir, "reports", "restore-test-*.json")),
+                           reverse=True)[:limit]:
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    r = json.load(fh)
+                r["id"] = os.path.basename(path)[len("restore-test-"):-len(".json")]
+                out.append(r)
+            except (OSError, ValueError):
+                continue
+        return out
+
+    @app.get("/restore-tests", response_class=HTMLResponse)
+    def restore_tests(request: Request):
+        user, role, err = require(request, "lecteur")
+        if err:
+            return err
+        return page(request, "restore_tests.html", user=user, reports=reports(),
+                    settings=cfg.restore_test)
+
+    @app.get("/restore-tests/{rid}", response_class=HTMLResponse)
+    def restore_test_detail(request: Request, rid: str):
+        user, role, err = require(request, "lecteur")
+        if err:
+            return err
+        rep = next((r for r in reports(500) if r["id"] == rid), None)
+        if rep is None:
+            return page(request, "error.html", user=user, message="Rapport introuvable.")
+        from odooguard.restoretest import format_report
+        return page(request, "restore_test_detail.html", user=user, r=rep, text=format_report(rep))
 
     return app
 

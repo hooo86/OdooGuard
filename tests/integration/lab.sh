@@ -258,6 +258,84 @@ curl -sk -o /dev/null -H "Authorization: Bearer $TOK" -H 'Content-Type: applicat
 $OG status --record >/dev/null 2>&1 || true
 [[ "$(runuser -u nobody -- /usr/local/bin/odooguard-zabbix component ext:veeam level)" == "0" ]] \
   && ok "rapport Veeam reçu : composant OK" || ko "rapport Veeam non pris en compte"
+step "15. Phase 3 : installation, VM de test simulée (même machine)"
+SKIP_VENV=1 "$SRC/install/install-phase3.sh" >/tmp/lab-install-p3.log 2>&1 && ok "install-phase3.sh" || { ko "install-phase3.sh"; tail -5 /tmp/lab-install-p3.log; }
+cat > /usr/local/bin/fake-odoo <<'EOF2'
+#!/bin/bash
+# Faux binaire Odoo (labo) : « neutralize -d BASE » pose le marqueur de neutralisation
+db=""; while [[ $# -gt 0 ]]; do [[ "$1" == "-d" ]] && db="$2"; shift; done
+psql -XAtq -d "$db" -c "insert into ir_config_parameter(key, value) values ('database.is_neutralized', 'True')"
+EOF2
+chmod 755 /usr/local/bin/fake-odoo
+cat >> /etc/odooguard-agent.conf <<'EOF2'
+ODOO_BIN=/usr/local/bin/fake-odoo
+# Labo uniquement : la même machine joue server01 ET la VM de test
+ALLOW_TEST_DROP=yes
+EOF2
+python3 - <<'PY'
+p = "/etc/odooguard/odooguard.conf"
+s = open(p).read()
+head, sep, tail = s.partition("[target:testvm]")
+tail = tail.replace("host = 192.168.8.82", "host = 127.0.0.1", 1).replace("pg_version = 15", "pg_version = 16", 1)
+s = head + sep + tail
+s = s.replace("odoo_url = http://192.168.8.82:8069", "odoo_url = http://127.0.0.1:8069")
+s = s.replace("start_odoo = yes", "start_odoo = no").replace("tolerance = 0.10", "tolerance = 0.90")
+open(p, "w").write(s)
+PY
+rm -f /tmp/lab-fake/*
+# Le service web reprend le nouveau code (systemctl restart odooguard-web en production)
+pkill -f "odooguard web" || true
+(cd / && runuser -u odooguard -- env PYTHONPATH=/opt/odooguard nohup /opt/odooguard/venv/bin/python -m odooguard web >/tmp/lab-web.log 2>&1 &)
+for i in $(seq 1 20); do curl -sk -o /dev/null https://127.0.0.1:8443/healthz && break; sleep 1; done
+
+step "16. Test de restauration automatique (instant T, VM de test)"
+$OG restore-test --time "$T" >/tmp/lab-restoretest.txt 2>&1 && ok "odooguard restore-test : réussi" || { ko "restore-test"; tail -25 /tmp/lab-restoretest.txt; }
+for chk in "Arrêt au bon instant" "Fraîcheur des données" "Pièces jointes lisibles" "Copie neutralisée" "Odoo démarre"; do
+  grep -q "✅ $chk" /tmp/lab-restoretest.txt && ok "contrôle « $chk »" || ko "contrôle « $chk »"
+done
+n=$(psqlp -c "select count(*) from pg_database where datname like 'ogtest\_%'")
+[[ "$n" == "1" ]] && ok "base de test ogtest_* créée sur la VM de test" || ko "bases de test : $n"
+tdb=$(psqlp -c "select datname from pg_database where datname like 'ogtest\_%' limit 1")
+v=$(psqlp -d "$tdb" -c "select value from ir_config_parameter where key='database.is_neutralized'" 2>/dev/null || echo "?")
+[[ "$v" == "True" ]] && ok "copie de test neutralisée" || ko "neutralisation : $v"
+grep -qs "R=C3=89USSI" /tmp/lab-fake/mail-*.eml && ok "rapport envoyé par e-mail" || ko "rapport e-mail absent"
+grep -qs "test de restauration" /tmp/lab-fake/telegram-*.txt && ok "rapport envoyé sur Telegram" || ko "rapport Telegram absent"
+ls /var/lib/odooguard/reports/restore-test-*.json >/dev/null 2>&1 && ok "rapport JSON archivé" || ko "rapport JSON"
+psqlp -c "create database ogtest_ancien" >/dev/null
+$OG restore-test --time "$T" --no-send >/dev/null 2>&1 || true
+n=$(psqlp -c "select count(*) from pg_database where datname like 'ogtest\_%'")
+[[ "$n" == "1" ]] && ok "nettoyage : seule la dernière base de test reste (keep_last=1)" || ko "bases de test après 2e test : $n"
+$OG status --record >/dev/null 2>&1 || true
+[[ "$(runuser -u nobody -- /usr/local/bin/odooguard-zabbix component restore-test level)" == "0" ]] \
+  && ok "composant restore-test OK (Zabbix)" || ko "composant restore-test"
+if runuser -u odooguard -- ssh -i /etc/odooguard/ssh/id_agent -o BatchMode=yes root@127.0.0.1 "db-drop-test $DB" 2>/dev/null; then
+  ko "db-drop-test a accepté une base non ogtest_ !"; else ok "agent : db-drop-test refuse une base hors ogtest_"; fi
+
+step "17. Assistant web : copie demandée par un opérateur, exécutée par odooguard-jobs"
+ODOOGUARD_NEW_PASSWORD='motdepasse-labo-12' $OG web-user add oscar operateur >/dev/null
+python3 - <<'PY' && ok "assistant : prévisualisation + demande enregistrée" || ko "assistant web"
+import html, http.cookiejar, re, ssl, urllib.parse, urllib.request
+ctx = ssl._create_unverified_context()
+op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+                                 urllib.request.HTTPSHandler(context=ctx))
+B = "https://127.0.0.1:8443"
+def post(path, data):
+    return op.open(B + path, urllib.parse.urlencode(data).encode()).read().decode()
+post("/login", {"username": "oscar", "password": "motdepasse-labo-12"})
+tok = re.search(r'name="csrf" value="([^"]+)"', op.open(B + "/restore").read().decode()).group(1)
+r = post("/restore/preview", {"csrf": tok, "db": "LNHC_Prod_2025", "moment": "latest", "target": "testvm",
+                              "mode": "copy", "as_name": "LNHC_web_copie", "with_filestore": "on"})
+assert "LNHC_web_copie" in r and "Lancer la restauration" in r, re.findall(r'banner[^>]*>([^<]+)', r)
+params = html.unescape(re.search(r'name="params" value="([^"]+)"', r).group(1))
+page = post("/restore/submit", {"csrf": tok, "params": params})
+assert "Travail n°" in page, page[:500]
+PY
+(cd / && runuser -u odooguard -- /usr/local/bin/odooguard jobs-worker --once >/tmp/lab-jobs.log 2>&1)
+st=$(sqlite3 /var/lib/odooguard/history.db "select status||' '||user from jobs order by id desc limit 1")
+[[ "$st" == "success oscar" ]] && ok "travail exécuté par odooguard-jobs (demandé par oscar)" || { ko "travail : $st"; tail -5 /tmp/lab-jobs.log; }
+v=$(psqlp -d LNHC_web_copie -c "select value from ir_config_parameter where key='database.is_neutralized'" 2>/dev/null || echo "?")
+[[ "$v" == "True" ]] && ok "copie web créée et neutralisée" || ko "copie web : $v"
+grep -q '"actor": "web:oscar"' /var/log/odooguard/audit.log && ok "audit : auteur web:oscar" || ko "audit auteur web"
 pkill -f "odooguard web" || true; pkill -f fake_services.py || true
 
 echo; echo "Résultat : $pass OK, $fail échec(s)"

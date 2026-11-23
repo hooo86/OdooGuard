@@ -109,6 +109,21 @@ class WebSettings:
 
 
 @dataclass
+class RestoreTestSettings:
+    """Test de restauration automatique hebdomadaire (phase 3)."""
+
+    target: str = "testvm"
+    databases: list[str] = field(default_factory=list)  # vide = [odoo] databases
+    point: str = "hier 16:00"  # instant restauré (PITR)
+    keep_last: int = 1  # bases de test conservées pour consultation
+    tolerance: float = 0.10  # écart toléré des comptages par rapport à la production
+    max_staleness_days: float = 7.0  # dernière activité trop ancienne => avertissement
+    start_odoo: bool = True
+    http_timeout: int = 300
+    max_age: int = 8 * 86400  # au-delà sans test réussi : critique
+
+
+@dataclass
 class Config:
     path: str
     site: str = "LNHC"
@@ -153,6 +168,7 @@ class Config:
     externals: dict[str, External] = field(default_factory=dict)
     alerts: AlertSettings = field(default_factory=AlertSettings)
     web: WebSettings = field(default_factory=WebSettings)
+    restore_test: RestoreTestSettings = field(default_factory=RestoreTestSettings)
 
     # ------------------------------------------------------------------ accès
     def target(self, name: str) -> Target:
@@ -252,7 +268,10 @@ def load(path: str | None = None, *, strict_perms: bool = True) -> Config:
         check_permissions(path)
 
     cp = configparser.ConfigParser(interpolation=None)
-    cp.read(path, encoding="utf-8")
+    try:
+        cp.read(path, encoding="utf-8")
+    except configparser.Error as exc:
+        raise ConfigError(f"{path} illisible : {exc}") from None
     r = _Reader(cp)
 
     cfg = Config(path=path)
@@ -327,6 +346,17 @@ def load(path: str | None = None, *, strict_perms: bool = True) -> Config:
     w.secret_file = r.get("web", "secret_file", w.secret_file)
     w.session_hours = r.float("web", "session_hours", w.session_hours)
     w.public_status = r.get("web", "public_status", w.public_status)
+
+    t = cfg.restore_test
+    t.target = r.get("restore_test", "target", t.target)
+    t.databases = _split(r.get("restore_test", "databases", "") or "") or list(cfg.databases)
+    t.point = r.get("restore_test", "point", t.point)
+    t.keep_last = r.int("restore_test", "keep_last", t.keep_last)
+    t.tolerance = r.float("restore_test", "tolerance", t.tolerance)
+    t.max_staleness_days = r.float("restore_test", "max_staleness_days", t.max_staleness_days)
+    t.start_odoo = r.bool("restore_test", "start_odoo", True)
+    t.http_timeout = r.int("restore_test", "http_timeout", t.http_timeout)
+    t.max_age = r.int("restore_test", "max_age", t.max_age)
 
     for section in cp.sections():
         if section.startswith("target:"):

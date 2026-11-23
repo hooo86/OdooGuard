@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Travail n°{{ job.id }}{% endblock %}
+{% block content %}
+<h1>Travail n°{{ job.id }} <span class="muted">— {{ job.kind }}</span></h1>
+<p class="muted">Étape 3 / 3 — exécution par le service odooguard-jobs. Cette page se met à jour toute seule ; elle peut être fermée sans interrompre le travail.</p>
+{% include "_job.html" %}
+{% endblock %}
