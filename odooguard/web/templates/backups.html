@@ -3,7 +3,9 @@
 {% block page_title %}Sauvegardes{% endblock %}
 {% block content %}
 {% if launched %}
-<p class="banner banner-info" role="status">Demande enregistrée : <strong>{{ launched }}</strong>{% if launched_job %} (travail <a href="/jobs/{{ launched_job.id }}">n°{{ launched_job.id }}</a>{% if launched_job.status == 'failed' %} — <strong>en échec</strong> : {{ launched_job.error }}{% endif %}){% endif %}. La progression apparaît ci-dessous dans quelques secondes.</p>
+{% if launched_job and launched_job.status == 'failed' and 'déjà en cours' in (launched_job.error or '') %}<p class="banner banner-info" role="status"><strong>{{ launched }}</strong> : une opération de ce type est déjà en cours, la nouvelle demande n'a pas été lancée (travail <a href="/jobs/{{ launched_job.id }}">n°{{ launched_job.id }}</a>). Suivez celle en cours ci-dessous.</p>
+{% elif launched_job and launched_job.status == 'failed' %}<p class="banner banner-critical" role="alert">Demande <strong>{{ launched }}</strong> en échec (travail <a href="/jobs/{{ launched_job.id }}">n°{{ launched_job.id }}</a>) : {{ launched_job.error }}</p>
+{% else %}<p class="banner banner-info" role="status">Demande enregistrée : <strong>{{ launched }}</strong>{% if launched_job %} (travail <a href="/jobs/{{ launched_job.id }}">n°{{ launched_job.id }}</a>){% endif %}. La progression apparaît ci-dessous dans quelques secondes.</p>{% endif %}
 {% endif %}
 {% if role in ('operateur', 'admin') %}
 <section class="card launch">
