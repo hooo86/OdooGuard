@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% from "_badge.html" import badge %}
 {% block title %}Rapport de test{% endblock %}
+{% block page_title %}Test de restauration du {{ fmt_time(r.started_at) }} {{ badge(r.level) }}{% endblock %}
 {% block content %}
-<h1>Test de restauration du {{ fmt_time(r.started_at) }} {{ badge(r.level) }}</h1>
 <p>Instant restauré : <strong>{{ r.point[:19].replace('T', ' ') }}</strong> · cible {{ r.target }} · durée {{ fmt_age(r.ended_at - r.started_at) }}</p>
 {% for d in r.databases %}
 <h2>{{ d.db }} → <code>{{ d.test_db }}</code> {{ badge(d.level) }}</h2>

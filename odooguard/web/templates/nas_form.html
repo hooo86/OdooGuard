@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}NAS {{ form.name }}{% endblock %}
+{% block page_title %}{{ "Modifier" if form.managed else ("Configurer" if not is_new or form.share else "Ajouter") }} le NAS <code>{{ form.name }}</code>{% endblock %}
 {% block content %}
-<h1>{{ "Modifier" if form.managed else ("Configurer" if not is_new or form.share else "Ajouter") }} le NAS <code>{{ form.name }}</code></h1>
 {% if error %}<p class="banner banner-critical" role="alert">{{ error }}</p>{% endif %}
 <form method="post" action="/nas/save" class="card wizard" autocomplete="off">
   <input type="hidden" name="csrf" value="{{ csrf }}">

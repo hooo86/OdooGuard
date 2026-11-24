@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Réglages{% endblock %}
+{% block page_title %}Réglages{% endblock %}
 {% block content %}
-<h1>Réglages</h1>
 <div class="settings-grid">
-  <a class="card settings-card" href="/planification"><strong>Planification</strong><span class="muted">Quand tourne chaque type de sauvegarde, activation, prochaine exécution.</span></a>
+  <a class="card settings-card" href="/planification"><strong>{{ icon("event_repeat") }}Planification</strong><span class="muted">Quand tourne chaque type de sauvegarde, activation, prochaine exécution.</span></a>
   {% if role == 'admin' %}
-  <a class="card settings-card" href="/notifications"><strong>Notifications</strong><span class="muted">Serveur SMTP, bot Telegram, niveau d'alerte, message de test.</span></a>
-  <a class="card settings-card" href="/utilisateurs"><strong>Utilisateurs</strong><span class="muted">Comptes du tableau de bord et rôles (lecteur, opérateur, admin).</span></a>
+  <a class="card settings-card" href="/notifications"><strong>{{ icon("mail") }}Notifications</strong><span class="muted">Serveur SMTP, bot Telegram, niveau d'alerte, message de test.</span></a>
+  <a class="card settings-card" href="/utilisateurs"><strong>{{ icon("group") }}Utilisateurs</strong><span class="muted">Comptes du tableau de bord et rôles (lecteur, opérateur, admin).</span></a>
   {% endif %}
-  <a class="card settings-card" href="/nas"><strong>NAS</strong><span class="muted">Destinations des copies, identifiants, test d'accès.</span></a>
+  <a class="card settings-card" href="/nas"><strong>{{ icon("hard_drive") }}NAS</strong><span class="muted">Destinations des copies, identifiants, test d'accès.</span></a>
 </div>
 {% if role != 'admin' %}<p class="small muted">Notifications et utilisateurs : réservés au rôle admin.</p>{% endif %}
 {% endblock %}

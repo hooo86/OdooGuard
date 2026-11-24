@@ -6,27 +6,27 @@
     depuis {{ fmt_age((st.generated_at and (now_ts - st.generated_at)) or None) }}. Vérifier le serveur OdooGuard.
   </p>
   {% endif %}
-  <section class="hero">
-    <div class="hero-main">
-      <div class="label">État global</div>
+  <section class="hero" aria-label="Indicateurs clés">
+    <article class="metric">
+      <header><span class="label">État global</span>{{ icon('shield') }}</header>
       <div class="hero-value">{{ badge(st.overall) }}</div>
-      <div class="muted">calculé le {{ fmt_time(st.generated_at) }}</div>
-    </div>
-    <div class="hero-kpi">
-      <div class="label">Perte de données max. — base</div>
+      <span class="small muted">calculé le {{ fmt_time(st.generated_at) }}</span>
+    </article>
+    <article class="metric">
+      <header><span class="label">Perte de données max. — base</span>{{ icon('database') }}</header>
       <div class="kpi">{{ fmt_age(st.rpo.get('db_seconds')) }}</div>
-      <div class="muted">objectif ≤ 1 h</div>
-    </div>
-    <div class="hero-kpi">
-      <div class="label">Perte de données max. — fichiers</div>
+      <span class="small muted">objectif ≤ 1 h · flux WAL continu</span>
+    </article>
+    <article class="metric">
+      <header><span class="label">Perte de données max. — fichiers</span><span class="accent">{{ icon('folder') }}</span></header>
       <div class="kpi">{{ fmt_age(st.rpo.get('files_seconds')) }}</div>
-      <div class="muted">objectif ≤ 1 h</div>
-    </div>
-    <div class="hero-kpi">
-      <div class="label">Alertes actives</div>
+      <span class="small muted">objectif ≤ 1 h · filestore, modules</span>
+    </article>
+    <article class="metric">
+      <header><span class="label">Alertes actives</span>{{ icon('notifications_active') }}</header>
       <div class="kpi">{{ active|length }}</div>
-      <div class="muted"><a href="/alerts">détail</a></div>
-    </div>
+      <span class="small"><a href="/alerts">voir le détail</a></span>
+    </article>
   </section>
 
   <div class="table-wrap"><table class="components">

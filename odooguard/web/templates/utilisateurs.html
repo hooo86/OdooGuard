@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Utilisateurs{% endblock %}
+{% block page_title %}Utilisateurs du tableau de bord{% endblock %}
 {% block content %}
-<h1>Utilisateurs du tableau de bord</h1>
 {% if error %}<p class="banner banner-critical" role="alert">{{ error }}</p>{% endif %}
 <p class="small muted"><strong>lecteur</strong> : consultation · <strong>opérateur</strong> : lancer des sauvegardes, restaurer une copie neutralisée, tester · <strong>admin</strong> : tout, dont remplacer une base, NAS, planification, notifications, utilisateurs.</p>
 <div class="table-wrap"><table>

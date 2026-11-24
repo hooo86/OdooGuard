@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% from "_badge.html" import badge %}
 {% block title %}NAS{% endblock %}
+{% block page_title %}NAS de destination{% endblock %}
+{% block page_subtitle %}OdooGuard recopie chaque heure ses dépôts (base et fichiers) sur chacun de ces NAS, puis vérifie la copie. Un NAS ajouté ici est monté par OdooGuard (partage CIFS/SMB) et remonté automatiquement après une coupure.{% endblock %}
 {% block content %}
-<h1>NAS de destination</h1>
-<p class="muted">OdooGuard recopie chaque heure ses dépôts (base et fichiers) sur chacun de ces NAS, puis vérifie la copie. Un NAS ajouté ici est monté par OdooGuard (partage CIFS/SMB) et remonté automatiquement après une coupure.</p>
 {% if role == 'admin' %}<p><a class="button primary" href="/nas/new">+ Ajouter un NAS</a></p>{% endif %}
 <div class="table-wrap"><table>
   <thead><tr><th>Nom</th><th>Partage</th><th>Accès</th><th>Dernière copie</th><th>Espace</th><th>Actions</th></tr></thead>

@@ -22,6 +22,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup
 
 from odooguard import __version__, external, jobs
 from odooguard.config import Config
@@ -66,6 +67,12 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
                                  LEVEL_FR=LEVEL_FR, LEVEL_ICON=LEVEL_ICON, site=cfg.site,
                                  version=__version__, label=component_label)
     templates.env.filters["fromjson"] = json.loads
+
+    def icon(name: str) -> Markup:
+        """Icône du jeu servi localement (/static/icons.svg) ; nom = littéral des gabarits."""
+        safe = "".join(c for c in name if c.isalnum() or c == "_")
+        return Markup(f'<svg class="icon" aria-hidden="true"><use href="/static/icons.svg#i-{safe}"></use></svg>')
+    templates.env.globals["icon"] = icon
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
     # ------------------------------------------------------------ outils
@@ -99,6 +106,7 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         session = request.cookies.get(auth.COOKIE) or ""
         return templates.TemplateResponse(
             request, name, status_code=status, context={"user": user, "role": role_of(user), "now_ts": time.time(),
+                                                         "alerts_count": len(history.alerts_active()) if user else 0,
                             "csrf": auth.csrf_token(secret, session) if session else "", **ctx})
 
     @app.middleware("http")

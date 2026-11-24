@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 72" role="img" aria-label="OdooGuard">
+  <!-- Logo OdooGuard : bouclier mi-orange mi-bleu, base de données au centre -->
+  <defs>
+    <clipPath id="g"><path d="M32 2 60 11v23c0 18-11.5 30-28 36C15.5 64 4 52 4 34V11Z"/></clipPath>
+  </defs>
+  <g clip-path="url(#g)">
+    <rect x="0" y="0" width="32" height="72" fill="#FD651E"/>
+    <rect x="32" y="0" width="32" height="72" fill="#1446A0"/>
+  </g>
+  <g fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linejoin="round">
+    <path d="M16 23v22c0 3.6 7.2 6.5 16 6.5s16-2.9 16-6.5V23"/>
+    <path d="M16 30.5c0 3.6 7.2 6.5 16 6.5s16-2.9 16-6.5"/>
+    <path d="M16 38c0 3.6 7.2 6.5 16 6.5s16-2.9 16-6.5"/>
+  </g>
+  <ellipse cx="32" cy="23" rx="16" ry="6.5" fill="#1446A0" stroke="#FFFFFF" stroke-width="3.2"/>
+</svg>

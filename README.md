@@ -86,6 +86,17 @@ deploy/windows/       PowerShell : copie hors ligne G:\, tâche planifiée, Veea
 tools/mesure-impact.py  mesure de l'impact sur le temps de réponse d'Odoo
 ```
 
+## Design
+
+Interface au design « OdooGuard — System » : logo bouclier orange et bleu, bleu cobalt
+et orange vif, thèmes clair et sombre (bouton en bas de la barre latérale, choix mémorisé
+par navigateur). Polices et icônes servies localement, sans aucun appel à Internet :
+- Wix Madefor Display, Instrument Sans et Spline Sans Mono (licence SIL OFL 1.1,
+  `odooguard/web/static/fonts/LICENSE-*.txt`) ;
+- icônes Material Symbols (Google, licence Apache 2.0, `static/LICENSE-material-symbols.txt`).
+
+Captures : `docs/img/tableau-de-bord.png` (clair), `docs/img/tableau-de-bord-sombre.png`.
+
 ## Secrets
 
 Aucun secret dans Git. Ils sont générés à l'installation dans `/etc/odooguard/` (droits 600) :

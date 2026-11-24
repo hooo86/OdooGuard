@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Sauvegardes{% endblock %}
+{% block page_title %}Sauvegardes{% endblock %}
 {% block content %}
-<h1>Sauvegardes</h1>
 {% if launched %}
 <p class="banner banner-info" role="status">Demande enregistrée : <strong>{{ launched }}</strong>{% if launched_job %} (travail <a href="/jobs/{{ launched_job.id }}">n°{{ launched_job.id }}</a>{% if launched_job.status == 'failed' %} — <strong>en échec</strong> : {{ launched_job.error }}{% endif %}){% endif %}. La progression apparaît ci-dessous dans quelques secondes.</p>
 {% endif %}
