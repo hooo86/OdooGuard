@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}NAS {{ form.name }}{% endblock %}
+{% block content %}
+<h1>{{ "Modifier" if form.managed else ("Configurer" if not is_new or form.share else "Ajouter") }} le NAS <code>{{ form.name }}</code></h1>
+{% if error %}<p class="banner banner-critical" role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="/nas/save" class="card wizard" autocomplete="off">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <fieldset>
+    <legend>Identification</legend>
+    <label>Nom court (lettres minuscules et chiffres)
+      <input name="name" value="{{ form.name or '' }}" pattern="[a-z][a-z0-9]{0,15}" required {% if not is_new or form.managed %}readonly{% endif %}></label>
+    <label>Partage réseau
+      <input name="share" value="{{ form.share or '' }}" placeholder="//192.168.8.30/odoo" required></label>
+    <label>Dossier OdooGuard dans ce partage
+      <input name="subdir" value="{{ form.subdir or 'odooguard' }}" required></label>
+  </fieldset>
+  <fieldset>
+    <legend>Compte d'accès au partage</legend>
+    <label>Compte <input name="username" value="{{ form.username or '' }}" required></label>
+    <label>Domaine Windows (facultatif) <input name="domain" value="{{ form.domain or '' }}"></label>
+    <label>Mot de passe
+      <input name="password" type="password" autocomplete="new-password" {% if is_new and not form.managed %}required{% endif %}
+             placeholder="{{ '' if is_new and not form.managed else 'laisser vide pour conserver le mot de passe actuel' }}"></label>
+    <p class="small muted">Le mot de passe n'est jamais réaffiché ni enregistré dans l'historique : il est transmis une seule fois au service de montage, puis stocké dans un fichier lisible par root uniquement.</p>
+    <label>Version du protocole SMB
+      <select name="smb_version">{% for v in versions %}<option value="{{ v }}" {% if (form.smb_version or '3.0') == v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+    <p class="small muted">3.0 convient à la plupart des NAS ; essayer 2.1 si le montage échoue avec « Host is down ».</p>
+  </fieldset>
+  <fieldset>
+    <legend>Surveillance</legend>
+    <label>Espace libre minimal (Gio) avant alerte
+      <input name="min_free_gb" type="number" min="0" step="1" value="{{ form.min_free_gb or '500' }}"></label>
+    <label class="radio"><input type="checkbox" name="enabled" {% if form.enabled %}checked{% endif %}> Copier vers ce NAS (décocher pour suspendre sans le retirer)</label>
+  </fieldset>
+  <div class="actions">
+    <a href="/nas">← Annuler</a>
+    <button type="submit" class="primary">Enregistrer et monter</button>
+  </div>
+  <p class="small muted">À l'enregistrement, OdooGuard monte le partage sur /mnt/odooguard/{{ form.name or '<nom>' }}, crée le dossier, vérifie l'écriture avec relecture et l'espace libre. Le résultat s'affiche sur la page suivante.</p>
+</form>
+{% endblock %}

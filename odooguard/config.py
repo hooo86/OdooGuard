@@ -62,6 +62,12 @@ class Destination:
     min_free_gb: float = 100.0
     restic_password_file: str = ""  # vide = même mot de passe que le dépôt local
     enabled: bool = True
+    # Renseignés quand le NAS est géré depuis le tableau de bord (page « NAS »)
+    share: str = ""  # //192.168.8.30/odoo
+    subdir: str = "odooguard"
+    username: str = ""
+    domain: str = ""
+    smb_version: str = "3.0"
 
 
 @dataclass
@@ -371,6 +377,11 @@ def load(path: str | None = None, *, strict_perms: bool = True) -> Config:
                 min_free_gb=r.float(section, "min_free_gb", 100.0),
                 restic_password_file=r.get(section, "restic_password_file", "") or "",
                 enabled=r.bool(section, "enabled", True),
+                share=r.get(section, "share", "") or "",
+                subdir=r.get(section, "subdir", "odooguard") or "odooguard",
+                username=r.get(section, "username", "") or "",
+                domain=r.get(section, "domain", "") or "",
+                smb_version=r.get(section, "smb_version", "3.0") or "3.0",
             )
         elif section.startswith("external:"):
             name = section.split(":", 1)[1]

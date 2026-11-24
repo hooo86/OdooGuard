@@ -105,3 +105,12 @@ form.inline { margin: 0 0 14px; }
 pre.log { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; max-height: 420px; overflow: auto; }
 .badge-unknown span { background: var(--text-muted); }
 @media (max-width: 640px) { .summary dl { grid-template-columns: 1fr; } }
+/* Page NAS */
+a.button { display: inline-block; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border);
+           background: var(--surface-2); color: var(--text-primary); text-decoration: none; }
+a.button.primary { background: var(--series-1); border-color: var(--series-1); color: #fff; }
+.actions-cell { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+.actions-cell form.inline { margin: 0; }
+details.remove summary { cursor: pointer; color: var(--status-critical); padding: 6px 4px; }
+details.remove form { display: grid; gap: 6px; margin-top: 6px; max-width: 280px; }
+input[readonly] { color: var(--text-muted); }

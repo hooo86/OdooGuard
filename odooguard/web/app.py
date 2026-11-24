@@ -445,6 +445,115 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         from odooguard.restoretest import format_report
         return page(request, "restore_test_detail.html", user=user, r=rep, text=format_report(rep))
 
+    # ------------------------------------------------------------ NAS (gestion graphique)
+    def fresh_cfg() -> Config:
+        """Configuration relue à chaque affichage : odooguard-jobs la modifie."""
+        from odooguard import config as config_mod
+        try:
+            return config_mod.load(cfg.path)
+        except Exception:  # noqa: BLE001
+            return cfg
+    def nas_rows() -> list[dict]:
+        st = {c["name"]: c for c in load_status().get("components", [])}
+        rows = []
+        for d in fresh_cfg().destinations.values():
+            rows.append({"d": d, "access": st.get(f"nas:{d.name}"), "copy_state": st.get(f"copy:{d.name}"),
+                         "managed": bool(d.share)})
+        return rows
+
+    @app.get("/nas", response_class=HTMLResponse)
+    def nas_list(request: Request):
+        user, role, err = require(request, "lecteur")
+        if err:
+            return err
+        return page(request, "nas.html", user=user, rows=nas_rows(), recent=history.jobs_recent(5))
+
+    def nas_form_page(request, user, form, error=None, is_new=True):
+        return page(request, "nas_form.html", user=user, form=form, error=error, is_new=is_new,
+                    versions=("3.1.1", "3.0", "2.1", "2.0"))
+
+    @app.get("/nas/new", response_class=HTMLResponse)
+    def nas_new(request: Request):
+        user, role, err = require(request, "admin")
+        if err:
+            return err
+        used = set(fresh_cfg().destinations)
+        name = next(f"nas{i}" for i in range(1, 100) if f"nas{i}" not in used)
+        return nas_form_page(request, user, {"name": name, "subdir": "odooguard", "smb_version": "3.0",
+                                             "min_free_gb": "500", "enabled": True})
+
+    @app.get("/nas/{name}/edit", response_class=HTMLResponse)
+    def nas_edit(request: Request, name: str):
+        user, role, err = require(request, "admin")
+        if err:
+            return err
+        d = fresh_cfg().destinations.get(name)
+        if d is None:
+            return page(request, "error.html", user=user, message="NAS inconnu.")
+        # NAS de la configuration d'origine, jamais encore monté par OdooGuard :
+        # on propose le partage documenté (docs/installation-phase1.md).
+        known = {"/mnt/nas-odoo": "//192.168.8.30/odoo", "/mnt/nas-backups": "//192.168.3.19/Backups"}
+        share = d.share or known.get(d.mountpoint, "")
+        return nas_form_page(request, user, {"name": d.name, "share": share, "username": d.username,
+                                             "domain": d.domain, "smb_version": d.smb_version,
+                                             "subdir": d.subdir, "min_free_gb": f"{d.min_free_gb:g}",
+                                             "enabled": d.enabled, "managed": bool(d.share)},
+                             is_new=not d.share)
+
+    @app.post("/nas/save")
+    async def nas_save(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        from odooguard import nas
+        password = form.get("password") or ""
+        is_new = not (form.get("name") in fresh_cfg().destinations and fresh_cfg().destinations[form["name"]].share)
+        params = {k: form.get(k, "") for k in ("name", "share", "username", "domain", "smb_version",
+                                               "subdir", "min_free_gb")}
+        params["enabled"] = form.get("enabled") == "on"
+        params["has_password"] = bool(password)
+        try:
+            v = nas.validate(params, require_password=is_new)
+        except OdooGuardError as exc:
+            shown = {**params, "enabled": params["enabled"]}
+            return nas_form_page(request, user, shown, error=str(exc), is_new=is_new)
+        job_params = {**v, "has_password": bool(password)}
+        if password:
+            job_params["secret_token"] = nas.stash_password(cfg, password)
+        job_id = history.job_create(user, role, "nas-apply", job_params)
+        history.audit("web-nas-request", f"nas:{v['name']}", "queued",
+                      {"job": job_id, "share": v["share"], "user": v["username"],
+                       "password_changed": bool(password), "ip": client_ip(request)})
+        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+    @app.post("/nas/{name}/test")
+    async def nas_test(request: Request, name: str):
+        form = dict(await request.form())
+        user, role, err = require(request, "operateur", form.get("csrf", ""))
+        if err:
+            return err
+        if name not in fresh_cfg().destinations:
+            return page(request, "error.html", user=user, message="NAS inconnu.")
+        job_id = history.job_create(user, role, "nas-test", {"name": name})
+        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+    @app.post("/nas/{name}/remove")
+    async def nas_remove(request: Request, name: str):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        if name not in fresh_cfg().destinations:
+            return page(request, "error.html", user=user, message="NAS inconnu.")
+        if (form.get("confirm") or "").strip() != name:
+            return page(request, "error.html", user=user,
+                        message=f"Retrait annulé : il fallait retaper exactement « {name} ».")
+        job_id = history.job_create(user, role, "nas-remove", {"name": name, "confirm": name})
+        history.audit("web-nas-remove-request", f"nas:{name}", "queued",
+                      {"job": job_id, "ip": client_ip(request)})
+        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
     return app
 
 

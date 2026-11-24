@@ -64,6 +64,7 @@ odooguard/            application Python (bibliothèque standard uniquement en p
   dest.py             copies NAS : montage, test d'écriture et relecture, copie, vérification
   restore.py          restaurations (instance temporaire, transfert, neutralisation)
   restoretest.py      test de restauration hebdomadaire et son rapport
+  nas.py              gestion des NAS depuis le tableau de bord (config, montage via le programme root)
   jobs.py             file des demandes web, rôles, re-validation, exécution
   status.py           état global, mesure de la perte de données
   notify.py           alertes : journal, e-mail, Telegram, anti-rafale
@@ -75,6 +76,7 @@ server/               installé sur server01 et la VM de test
   odooguard-agent       agent root à liste blanche (commande forcée SSH)
   odooguard-pgbr-gate   filtre SSH : protocole pgBackRest uniquement
   odooguard-export      inventaire (paquets, pip, versions) pour reconstruire server01
+  odooguard-nas-helper  (sur OdooGuard, root via sudo) montage des NAS, liste blanche
 conf/                 modèles de configuration (aucun secret)
 deploy/systemd/       services et timers
 install/              scripts d'installation OdooGuard et server01

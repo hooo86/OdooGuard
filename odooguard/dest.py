@@ -31,6 +31,14 @@ log = logging.getLogger("odooguard")
 
 
 def preflight(dest: Destination) -> dict:
+    if dest.share and dest.mountpoint and not os.path.ismount(dest.mountpoint):
+        # NAS géré depuis le tableau de bord : on tente de le remonter (coupure
+        # réseau, redémarrage du NAS) avant de conclure à son absence.
+        from odooguard import nas
+        try:
+            nas.ensure_mounted(dest)
+        except OdooGuardError as exc:
+            log.warning("remontage de %s impossible : %s", dest.name, exc)
     if dest.mountpoint and not os.path.ismount(dest.mountpoint):
         raise OdooGuardError(
             f"destination {dest.name} : {dest.mountpoint} n'est pas monté (NAS absent ?)", "mount")

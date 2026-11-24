@@ -212,6 +212,47 @@ La restauration de l'instance complète (`restore cluster`) et la reprise totale
 (`restore full`) restent **réservées à la ligne de commande** : ce sont des opérations
 rares, qui exigent une préparation (voir `restauration.md`).
 
+## 5 bis. Configurer les NAS depuis le tableau de bord
+
+Le menu **NAS** liste les NAS de destination, avec pour chacun l'état d'accès (test
+d'écriture avec relecture) et la dernière copie. Droits :
+- `lecteur` : consultation ;
+- `operateur` : « Tester » ;
+- `admin` : ajouter, modifier, retirer.
+
+**Ajouter ou configurer un NAS** : partage (`//192.168.8.30/odoo`), dossier OdooGuard dans
+ce partage (`odooguard`), compte, domaine Windows éventuel, mot de passe, version SMB,
+espace libre minimal. À l'enregistrement, le service `odooguard-jobs` :
+1. monte le partage sur `/mnt/odooguard/<nom>`, par une unité systemd
+   `mnt-odooguard-<nom>.mount` et non par `/etc/fstab` ;
+2. désactive une ligne `/etc/fstab` qui monterait déjà le même partage, en en gardant
+   une copie `/etc/fstab.avant-odooguard-nas` ;
+3. crée le dossier, teste l'écriture avec relecture et l'espace libre ;
+4. met à jour la section `[destination:<nom>]` de `odooguard.conf`, avec une copie
+   `odooguard.conf.avant-nas`.
+
+Le résultat s'affiche en direct, comme pour une restauration.
+
+Le **mot de passe** n'est jamais réaffiché, ni écrit dans la base, l'audit ou les
+journaux. Il est déposé dans un fichier à usage unique (600), lu puis effacé par le
+service de travaux, et stocké pour le montage dans `/etc/odooguard/nas-<nom>.cred`
+(root, 600). Pour le changer, ressaisir le formulaire ; laisser le champ vide conserve
+l'actuel.
+
+Un NAS géré ainsi est **remonté automatiquement** s'il disparaît : redémarrage du NAS
+ou coupure réseau. Le contrôle des 5 minutes et chaque copie le tentent avant de
+signaler le NAS comme absent.
+
+**Retirer** un NAS (retaper son nom) : OdooGuard arrête d'y copier et le démonte. Les
+sauvegardes déjà présentes sur le NAS sont **conservées**.
+
+Sécurité : seul le service de travaux peut monter un NAS, via
+`/usr/local/sbin/odooguard-nas-helper`. C'est l'unique programme que le compte
+`odooguard` peut lancer en root pour cela (`/etc/sudoers.d/odooguard`). Il n'accepte que
+quatre actions (`apply`, `ensure`, `status`, `remove`), valide chaque argument, impose le
+point de montage et les options de montage. Le mot de passe passe par l'entrée standard,
+jamais par la ligne de commande.
+
 ## 6. Retour arrière
 
 ```bash

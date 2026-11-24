@@ -106,6 +106,13 @@ def compute(cfg: Config, history: History, *, query_source: bool = True) -> dict
         # Accessibilité testée à chaque passage (toutes les 5 min) : NAS absent,
         # montage figé ou erreur d'E/S => alerte bien avant la copie de la nuit.
         try:
+            if dest.share and dest.mountpoint and not os.path.ismount(dest.mountpoint):
+                # NAS géré depuis le tableau de bord : tentative de remontage automatique
+                from odooguard import nas
+                try:
+                    nas.ensure_mounted(dest)
+                except OdooGuardError:
+                    pass
             if dest.mountpoint and not os.path.ismount(dest.mountpoint):
                 raise OdooGuardError(f"{dest.mountpoint} non monté", "mount")
             io_probe(dest.path, size=64 * 1024)

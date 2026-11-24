@@ -300,6 +300,10 @@ pkill -f "odooguard web" || true
 (cd / && runuser -u odooguard -- env PYTHONPATH=/opt/odooguard nohup /opt/odooguard/venv/bin/python -m odooguard web >/tmp/lab-web.log 2>&1 &)
 for i in $(seq 1 20); do curl -sk -o /dev/null https://127.0.0.1:8443/healthz && break; sleep 1; done
 
+v=$(runuser -u odooguard -- sudo -n /usr/local/sbin/odooguard-nas-helper status nas1 2>&1)
+echo "$v" | grep -q '"managed": false' && ok "sudoers : odooguard lance le programme NAS en root" || ko "programme NAS via sudo : $v"
+if runuser -u odooguard -- sudo -n /usr/bin/id >/dev/null 2>&1; then ko "sudoers trop large !"; else ok "sudoers : aucune autre commande root"; fi
+
 step "16. Test de restauration automatique (instant T, VM de test)"
 $OG restore-test --time "$T" >/tmp/lab-restoretest.txt 2>&1 && ok "odooguard restore-test : réussi" || { ko "restore-test"; tail -25 /tmp/lab-restoretest.txt; }
 for chk in "Arrêt au bon instant" "Fraîcheur des données" "Pièces jointes lisibles" "Copie neutralisée" "Odoo démarre"; do

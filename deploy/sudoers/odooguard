@@ -1,3 +1,6 @@
 # /etc/sudoers.d/odooguard  (root:root 440) - droits minimaux du compte de service
 # Relancer la réception des WAL après une restauration de l'instance de production.
 odooguard ALL=(root) NOPASSWD: /usr/bin/systemctl restart odooguard-walreceiver.service
+# Montage des NAS gérés depuis le tableau de bord : programme à liste blanche
+# (apply / ensure / status / remove, arguments validés, mot de passe sur stdin).
+odooguard ALL=(root) NOPASSWD: /usr/local/sbin/odooguard-nas-helper

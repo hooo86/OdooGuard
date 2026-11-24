@@ -64,7 +64,11 @@ echo 'LABEL=odooguard /srv/odooguard ext4 defaults,noatime 0 2' | sudo tee -a /e
 sudo mkdir -p /srv/odooguard && sudo mount /srv/odooguard
 ```
 
-1.4 Montages des NAS. Les identifiants vont dans un fichier 600, jamais dans fstab :
+1.4 Montages des NAS.
+
+**Plus simple, après l'installation de la phase 3 :** menu **NAS** du tableau de bord
+(`docs/installation-phase3.md`, section 5 bis). Les étapes ci-dessous sont la méthode
+manuelle équivalente. Les identifiants vont dans un fichier 600, jamais dans fstab :
 
 ```bash
 sudo install -d -m 700 /etc/odooguard

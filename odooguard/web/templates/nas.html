@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% from "_badge.html" import badge %}
+{% block title %}NAS{% endblock %}
+{% block content %}
+<h1>NAS de destination</h1>
+<p class="muted">OdooGuard recopie chaque heure ses dépôts (base et fichiers) sur chacun de ces NAS, puis vérifie la copie. Un NAS ajouté ici est monté par OdooGuard (partage CIFS/SMB) et remonté automatiquement après une coupure.</p>
+{% if role == 'admin' %}<p><a class="button primary" href="/nas/new">+ Ajouter un NAS</a></p>{% endif %}
+<div class="table-wrap"><table>
+  <thead><tr><th>Nom</th><th>Partage</th><th>Accès</th><th>Dernière copie</th><th>Espace</th><th>Actions</th></tr></thead>
+  <tbody>
+  {% for r in rows %}{% set d = r.d %}
+    <tr>
+      <th scope="row">{{ d.name }}{% if not d.enabled %}<div class="small muted">désactivé</div>{% endif %}</th>
+      <td>{% if r.managed %}<code>{{ d.share }}</code><div class="small muted">compte {{ d.username }}{% if d.domain %} ({{ d.domain }}){% endif %} · SMB {{ d.smb_version }} · dossier {{ d.subdir }}</div>
+          {% else %}<span class="muted">non configuré depuis le tableau de bord</span><div class="small muted">{{ d.mountpoint or d.path }}</div>{% endif %}</td>
+      <td>{% if r.access %}{{ badge(r.access.level) }}<div class="small msg">{{ r.access.message }}</div>{% else %}—{% endif %}</td>
+      <td>{% if r.copy_state %}{{ badge(r.copy_state.level) }}<div class="small">{{ fmt_age(r.copy_state.age) }}</div>{% else %}—{% endif %}</td>
+      <td class="num">{{ d.min_free_gb|round|int }} Gio min.</td>
+      <td class="actions-cell">
+        {% if role in ('operateur', 'admin') %}
+        <form method="post" action="/nas/{{ d.name }}/test" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Tester</button></form>
+        {% endif %}
+        {% if role == 'admin' %}
+        <a class="button" href="/nas/{{ d.name }}/edit">{{ "Modifier" if r.managed else "Configurer" }}</a>
+        <details class="remove"><summary>Retirer</summary>
+          <form method="post" action="/nas/{{ d.name }}/remove">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <p class="small">OdooGuard cessera de copier vers ce NAS et le démontera. Les sauvegardes déjà présentes sur le NAS ne sont <strong>pas</strong> effacées.</p>
+            <label class="small">Retaper <code>{{ d.name }}</code> <input name="confirm" autocomplete="off" required></label>
+            <button type="submit" class="danger">Retirer {{ d.name }}</button>
+          </form>
+        </details>
+        {% endif %}
+      </td>
+    </tr>
+  {% else %}<tr><td colspan="6" class="muted">Aucun NAS configuré.</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+{% if role != 'admin' %}<p class="small muted">La modification des NAS est réservée au rôle admin.</p>{% endif %}
+{% endblock %}

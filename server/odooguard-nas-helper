@@ -1,0 +1,245 @@
+#!/usr/bin/python3 -I
+# =============================================================================
+# odooguard-nas-helper : montage des NAS d'OdooGuard (exécuté en root via sudo)
+#
+# Seul programme que le compte odooguard peut lancer en root pour les NAS
+# (règle /etc/sudoers.d/odooguard). Il ne sait faire QUE ceci :
+#   apply  NOM PARTAGE VERSION_SMB COMPTE DOMAINE   (mot de passe sur l'entrée standard)
+#   ensure NOM        remonte le partage s'il ne l'est plus
+#   status NOM        état du montage (JSON)
+#   remove NOM        démonte et retire le NAS (les données SUR le NAS ne sont pas touchées)
+#
+# Chaque argument est validé par expression régulière ; le point de montage est
+# toujours /mnt/odooguard/<NOM> ; les options de montage sont fixes. Le mot de
+# passe n'apparaît jamais en ligne de commande : il est lu sur l'entrée standard
+# et écrit dans /etc/odooguard/nas-<NOM>.cred (root, 600).
+#
+# Montage par une unité systemd dédiée (mnt-odooguard-<NOM>.mount) plutôt que
+# par /etc/fstab : création, modification et retrait sont atomiques et propres.
+# Une ligne /etc/fstab montant déjà le même partage est commentée (sauvegarde
+# /etc/fstab.avant-odooguard-nas) pour éviter un double montage.
+# =============================================================================
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+# Racine de test (tests automatisés uniquement) : sudo réinitialise
+# l'environnement, ce réglage ne peut donc pas être imposé à travers sudo.
+TEST_ROOT = os.environ.get("ODOOGUARD_NAS_HELPER_TESTROOT", "")
+ROOT = TEST_ROOT or "/"
+
+
+def p(*parts):
+    return os.path.join(ROOT, *[x.lstrip("/") for x in parts])
+
+
+UNIT_DIR = p("/etc/systemd/system")
+CRED_DIR = p("/etc/odooguard")
+MOUNT_BASE = "/mnt/odooguard"
+FSTAB = p("/etc/fstab")
+
+NAME_RE = re.compile(r"^[a-z][a-z0-9]{0,15}$")
+SHARE_RE = re.compile(r"^//[A-Za-z0-9.-]{1,253}/[A-Za-z0-9_.$-]{1,80}$")
+USER_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,64}$")
+DOMAIN_RE = re.compile(r"^[A-Za-z0-9_.-]{0,64}$")
+VERSIONS = ("3.1.1", "3.0", "2.1", "2.0")
+
+
+def die(msg, code=2):
+    print(json.dumps({"ok": False, "error": msg}, ensure_ascii=False))
+    sys.exit(code)
+
+
+def check(regex, value, label):
+    if not isinstance(value, str) or not regex.match(value):
+        die(f"{label} invalide : {value!r}")
+    return value
+
+
+def unit_name(name):
+    return f"mnt-odooguard-{name}.mount"
+
+
+def mountpoint(name):
+    return f"{MOUNT_BASE}/{name}"
+
+
+def systemctl(*args, check_rc=True):
+    if TEST_ROOT:
+        return ""
+    r = subprocess.run(["systemctl", *args], capture_output=True, text=True, timeout=120)
+    if check_rc and r.returncode != 0:
+        die(f"systemctl {' '.join(args)} : {(r.stderr or r.stdout).strip()[-400:]}")
+    return r.stdout.strip()
+
+
+def is_mounted(name):
+    if TEST_ROOT:
+        return os.path.isdir(p(mountpoint(name)))
+    return os.path.ismount(mountpoint(name))
+
+
+def journal_tail(name):
+    if TEST_ROOT:
+        return ""
+    r = subprocess.run(["journalctl", "-u", unit_name(name), "-n", "8", "--no-pager", "-o", "cat"],
+                       capture_output=True, text=True, timeout=30)
+    return r.stdout.strip()[-800:]
+
+
+def write_file(path, content, mode):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def read_password():
+    data = sys.stdin.read(1024) if not sys.stdin.isatty() else ""
+    data = data.rstrip("\n")
+    if "\n" in data or "\x00" in data or len(data) > 256:
+        die("mot de passe invalide (une seule ligne, 256 caractères au plus)")
+    return data
+
+
+def disable_fstab_duplicates(share):
+    """Commente une ligne /etc/fstab qui monterait déjà ce partage."""
+    if not os.path.exists(FSTAB):
+        return 0
+    lines = open(FSTAB, encoding="utf-8").read().splitlines(keepends=True)
+    changed = 0
+    out = []
+    for line in lines:
+        fields = line.split()
+        if fields and not line.lstrip().startswith("#") and fields[0].lower() == share.lower():
+            out.append("# désactivé par OdooGuard (montage géré par mnt-odooguard-*.mount) : " + line)
+            changed += 1
+        else:
+            out.append(line)
+    if changed:
+        backup = FSTAB + ".avant-odooguard-nas"
+        if not os.path.exists(backup):
+            write_file(backup, "".join(lines), 0o644)
+        write_file(FSTAB, "".join(out), 0o644)
+    return changed
+
+
+def cmd_apply(args):
+    if len(args) != 5:
+        die("usage : apply NOM PARTAGE VERSION COMPTE DOMAINE(- si aucun)")
+    name = check(NAME_RE, args[0], "nom")
+    share = check(SHARE_RE, args[1], "partage")
+    vers = args[2] if args[2] in VERSIONS else die(f"version SMB invalide : {args[2]!r}")
+    user = check(USER_RE, args[3], "compte")
+    domain = "" if args[4] == "-" else check(DOMAIN_RE, args[4], "domaine")
+    password = read_password()
+
+    cred = os.path.join(CRED_DIR, f"nas-{name}.cred")
+    if not password:
+        if not os.path.exists(cred):
+            die("mot de passe obligatoire pour un nouveau NAS")
+        for line in open(cred, encoding="utf-8"):
+            if line.startswith("password="):
+                password = line[len("password="):].rstrip("\n")
+    content = f"username={user}\npassword={password}\n" + (f"domain={domain}\n" if domain else "")
+    write_file(cred, content, 0o600)
+
+    fstab_changed = disable_fstab_duplicates(share)
+    mp = mountpoint(name)
+    os.makedirs(p(mp), exist_ok=True)
+    unit = (
+        "# Généré par OdooGuard (odooguard-nas-helper) - modifier depuis le tableau de bord\n"
+        "[Unit]\n"
+        f"Description=OdooGuard - NAS {name} ({share})\n"
+        "After=network-online.target\n"
+        "Wants=network-online.target\n\n"
+        "[Mount]\n"
+        f"What={share}\n"
+        f"Where={mp}\n"
+        "Type=cifs\n"
+        # hard : les erreurs d'E/S remontent au lieu d'être masquées (détection OdooGuard)
+        f"Options=credentials=/etc/odooguard/nas-{name}.cred,"
+        f"uid=odooguard,gid=odooguard,file_mode=0640,dir_mode=0750,vers={vers},hard,_netdev,nofail\n"
+        "TimeoutSec=30\n\n"
+        "[Install]\n"
+        "WantedBy=multi-user.target\n"
+    )
+    write_file(os.path.join(UNIT_DIR, unit_name(name)), unit, 0o644)
+    systemctl("daemon-reload")
+    systemctl("enable", unit_name(name))
+    if is_mounted(name):
+        systemctl("stop", unit_name(name), check_rc=False)
+    systemctl("start", unit_name(name), check_rc=False)
+    for _ in range(30):
+        if is_mounted(name):
+            break
+        time.sleep(1)
+    ok = is_mounted(name)
+    print(json.dumps({"ok": ok, "mountpoint": mp, "unit": unit_name(name),
+                      "fstab_lines_disabled": fstab_changed,
+                      "error": "" if ok else "montage impossible : " + journal_tail(name)},
+                     ensure_ascii=False))
+    sys.exit(0 if ok else 1)
+
+
+def cmd_ensure(args):
+    name = check(NAME_RE, args[0] if args else "", "nom")
+    if not os.path.exists(os.path.join(UNIT_DIR, unit_name(name))):
+        die(f"NAS {name} non géré par OdooGuard (aucune unité {unit_name(name)})")
+    if not is_mounted(name):
+        systemctl("start", unit_name(name), check_rc=False)
+        for _ in range(30):
+            if is_mounted(name):
+                break
+            time.sleep(1)
+    ok = is_mounted(name)
+    print(json.dumps({"ok": ok, "mountpoint": mountpoint(name),
+                      "error": "" if ok else journal_tail(name)}, ensure_ascii=False))
+    sys.exit(0 if ok else 1)
+
+
+def cmd_status(args):
+    name = check(NAME_RE, args[0] if args else "", "nom")
+    managed = os.path.exists(os.path.join(UNIT_DIR, unit_name(name)))
+    print(json.dumps({"ok": True, "managed": managed, "mounted": is_mounted(name) if managed else False,
+                      "credentials": os.path.exists(os.path.join(CRED_DIR, f"nas-{name}.cred"))}))
+
+
+def cmd_remove(args):
+    name = check(NAME_RE, args[0] if args else "", "nom")
+    unit = os.path.join(UNIT_DIR, unit_name(name))
+    if os.path.exists(unit):
+        systemctl("disable", "--now", unit_name(name), check_rc=False)
+        os.remove(unit)
+        systemctl("daemon-reload")
+    cred = os.path.join(CRED_DIR, f"nas-{name}.cred")
+    if os.path.exists(cred):
+        os.remove(cred)
+    try:
+        os.rmdir(p(mountpoint(name)))  # seulement s'il est vide (non monté)
+    except OSError:
+        pass
+    print(json.dumps({"ok": True, "removed": name}))
+
+
+def main():
+    if not TEST_ROOT and os.geteuid() != 0:
+        die("à exécuter en root (sudo -n /usr/local/sbin/odooguard-nas-helper ...)")
+    if len(sys.argv) < 2:
+        die("verbe manquant : apply | ensure | status | remove")
+    verb, args = sys.argv[1], sys.argv[2:]
+    handler = {"apply": cmd_apply, "ensure": cmd_ensure, "status": cmd_status,
+               "remove": cmd_remove}.get(verb)
+    if handler is None:
+        die(f"verbe inconnu : {verb}")
+    handler(args)
+
+
+if __name__ == "__main__":
+    main()

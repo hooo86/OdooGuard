@@ -121,6 +121,30 @@ def run_job(cfg: Config, history: History, job: dict) -> None:
                     raise
                 history.finish(run_id, "success", message=f"{v['db']} -> {v['as_name']} ({v['target']})",
                                details=result)
+        elif job["kind"] in ("nas-apply", "nas-test", "nas-remove"):
+            from odooguard import config as config_mod
+            from odooguard import nas
+            needed = "operateur" if job["kind"] == "nas-test" else "admin"
+            if not can(job["role"], needed):
+                raise OdooGuardError(f"droits insuffisants (rôle {needed} requis)", "usage")
+            fresh = config_mod.load(cfg.path)  # la configuration a pu changer depuis le démarrage
+            nas_action = {"nas-apply": nas.job_apply, "nas-test": nas.job_test,
+                          "nas-remove": nas.job_remove}[job["kind"]]
+            run_id = history.start(f"nas:{params.get('name', '?')}", job["kind"])
+            try:
+                result = nas_action(fresh, params)
+            except Exception as exc:
+                history.finish(run_id, "failed", message=str(exc), category=getattr(exc, "category", "error"))
+                raise
+            history.finish(run_id, "success", message=result.get("message", ""), details=result)
+            log.info("%s", result.get("message", ""))
+            if job["kind"] != "nas-test":
+                auditor.record(job["kind"], f"nas:{params.get('name')}", "success",
+                               **{k: v for k, v in params.items() if k not in ("secret_token",)})
+            try:
+                nas.refresh_status(fresh, history)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("actualisation de l'état : %s", exc)
         elif job["kind"] == "restore-test":
             if not can(job["role"], "operateur"):
                 raise OdooGuardError("droits insuffisants (rôle opérateur requis)", "usage")

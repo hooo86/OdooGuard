@@ -16,6 +16,17 @@ step "1. Code OdooGuard"
 rsync -a --delete --exclude .git --exclude tests --exclude venv "$SRC/" /opt/odooguard/
 install -d -o odooguard -g odooguard -m 750 /var/lib/odooguard/jobs /var/lib/odooguard/reports
 
+step "1 bis. Gestion des NAS depuis le tableau de bord (programme root à liste blanche)"
+install -m 755 "$SRC/server/odooguard-nas-helper" /usr/local/sbin/odooguard-nas-helper
+install -d -m 755 /mnt/odooguard
+install -m 440 "$SRC/deploy/sudoers/odooguard" /etc/sudoers.d/odooguard.new
+if visudo -cf /etc/sudoers.d/odooguard.new >/dev/null; then
+    mv /etc/sudoers.d/odooguard.new /etc/sudoers.d/odooguard
+else
+    rm -f /etc/sudoers.d/odooguard.new; echo "  ERREUR : règle sudoers invalide, non installée" >&2; exit 1
+fi
+command -v mount.cifs >/dev/null || apt-get install -y -q cifs-utils >/dev/null 2>&1 || true
+
 step "2. Configuration : section [restore_test] si absente"
 if ! grep -q '^\[restore_test\]' "$CONF"; then
     cp -a "$CONF" "$CONF.avant-phase3"
@@ -29,7 +40,7 @@ for u in odooguard-jobs.service odooguard-restore-test.service odooguard-restore
 done
 if systemctl daemon-reload 2>/dev/null; then
     systemctl restart odooguard-web.service || true
-    systemctl enable --now odooguard-jobs.service
+    systemctl enable odooguard-jobs.service && systemctl restart odooguard-jobs.service
     echo "  odooguard-restore-test.timer installé mais NON activé :"
     echo "  l'activer après un premier test manuel réussi (docs/installation-phase3.md, étape 4)."
 else
