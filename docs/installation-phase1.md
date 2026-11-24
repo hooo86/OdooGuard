@@ -85,11 +85,12 @@ Faire de même pour `nas2.cred`. Les UID et GID d'`odooguard` sont connus après
 les remplacer ci-dessous. Lignes à ajouter à `/etc/fstab` :
 
 ```
-//192.168.8.30/odoo     /mnt/nas-odoo     cifs  credentials=/etc/odooguard/nas1.cred,uid=odooguard,gid=odooguard,file_mode=0640,dir_mode=0750,vers=3.0,hard,_netdev,x-systemd.automount,x-systemd.mount-timeout=30  0 0
-//192.168.3.19/Backups  /mnt/nas-backups  cifs  credentials=/etc/odooguard/nas2.cred,uid=odooguard,gid=odooguard,file_mode=0640,dir_mode=0750,vers=3.0,hard,_netdev,x-systemd.automount,x-systemd.mount-timeout=30  0 0
+//192.168.8.30/odoo     /mnt/nas-odoo     cifs  credentials=/etc/odooguard/nas1.cred,uid=odooguard,gid=odooguard,file_mode=0640,dir_mode=0750,vers=3.0,soft,echo_interval=15,_netdev,x-systemd.automount,x-systemd.mount-timeout=30  0 0
+//192.168.3.19/Backups  /mnt/nas-backups  cifs  credentials=/etc/odooguard/nas2.cred,uid=odooguard,gid=odooguard,file_mode=0640,dir_mode=0750,vers=3.0,soft,echo_interval=15,_netdev,x-systemd.automount,x-systemd.mount-timeout=30  0 0
 ```
 
-`hard` fait remonter les erreurs d'E/S au lieu de les masquer : OdooGuard les détecte
+`soft` : si le NAS ne répond plus, l'écriture échoue avec une erreur d'E/S au lieu de
+bloquer indéfiniment (ce que ferait `hard`) ; OdooGuard la détecte, alerte et retente
 (test d'écriture et relecture avant chaque copie, puis toutes les 5 min).
 
 ---

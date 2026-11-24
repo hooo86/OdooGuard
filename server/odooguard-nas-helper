@@ -163,9 +163,11 @@ def cmd_apply(args):
         f"What={share}\n"
         f"Where={mp}\n"
         "Type=cifs\n"
-        # hard : les erreurs d'E/S remontent au lieu d'être masquées (détection OdooGuard)
+        # soft (et non hard) : si le NAS ne répond plus, l'écriture échoue avec une erreur
+        # d'E/S au lieu d'attendre indéfiniment ; OdooGuard la détecte, alerte et retente.
+        # echo_interval=15 : NAS injoignable détecté en ~30 s au lieu de ~2 min.
         f"Options=credentials=/etc/odooguard/nas-{name}.cred,"
-        f"uid=odooguard,gid=odooguard,file_mode=0640,dir_mode=0750,vers={vers},hard,_netdev,nofail\n"
+        f"uid=odooguard,gid=odooguard,file_mode=0640,dir_mode=0750,vers={vers},soft,echo_interval=15,_netdev,nofail\n"
         "TimeoutSec=30\n\n"
         "[Install]\n"
         "WantedBy=multi-user.target\n"

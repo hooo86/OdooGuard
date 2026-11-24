@@ -33,7 +33,7 @@ def test_helper_apply_writes_cred_unit_and_disables_fstab(tmp_path):
     assert oct(cred.stat().st_mode & 0o777) == "0o600"
     unit = (tmp_path / "etc/systemd/system/mnt-odooguard-nas1.mount").read_text()
     assert "What=//192.168.8.30/odoo" in unit and "Where=/mnt/odooguard/nas1" in unit
-    assert "credentials=/etc/odooguard/nas-nas1.cred" in unit and ",hard," in unit and "s3cr3t" not in unit
+    assert "credentials=/etc/odooguard/nas-nas1.cred" in unit and ",soft," in unit and "hard" not in unit and "s3cr3t" not in unit
     fstab = (tmp_path / "etc/fstab").read_text()
     assert fstab.startswith("# désactivé par OdooGuard") and "UUID=1 / ext4" in fstab
     assert (tmp_path / "etc/fstab.avant-odooguard-nas").exists()
