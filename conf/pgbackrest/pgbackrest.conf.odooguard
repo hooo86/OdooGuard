@@ -13,6 +13,11 @@ repo1-cipher-pass=@CIPHER_PASS@
 repo1-retention-full-type=count
 repo1-retention-full=4
 repo1-retention-diff=7
+# Regroupement des petits fichiers (pgBackRest >= 2.39) : une base Odoo compte des
+# dizaines de milliers de petits fichiers (tables, index) ; regroupés en paquets
+# d'environ 20 Mio, la copie vers les NAS (SMB) et vers G:\ est bien plus rapide.
+# Restauration inchangée, avec ou sans OdooGuard (format standard de pgBackRest).
+repo1-bundle=y
 compress-type=zst
 compress-level=3
 # 2 processus : compromis débit / charge de server01 en journée
