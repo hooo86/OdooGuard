@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import pwd
+import signal
 import sys
 import threading
 import time
@@ -54,6 +55,11 @@ def tracked(ctx: Ctx, component: str, kind: str, func, *, alert: bool = True):
     t0 = time.monotonic()
     try:
         result = func() or {}
+    except KeyboardInterrupt:
+        # Arrêt demandé (Ctrl+C, systemctl stop) : fin enregistrée, sans alerte critique
+        ctx.history.finish(run_id, "failed", message="exécution interrompue (arrêt demandé)",
+                           category="interrupted")
+        raise
     except Exception as exc:  # noqa: BLE001 - on veut tout tracer
         cat = getattr(exc, "category", "error")
         ctx.history.finish(run_id, "failed", message=str(exc), category=cat)
@@ -620,6 +626,10 @@ def _drop_privileges_if_root(run_as: str) -> None:
                           *sys.argv[1:]])
 
 
+def _sigterm(_signum, _frame):
+    raise KeyboardInterrupt
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -627,6 +637,9 @@ def main(argv: list[str] | None = None) -> int:
                         format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
     if argv is None:
         _drop_privileges_if_root("odooguard")
+        # systemctl stop envoie SIGTERM : traité comme Ctrl+C pour que l'historique
+        # enregistre « interrompue » au lieu de rester « en cours ».
+        signal.signal(signal.SIGTERM, _sigterm)
     try:
         ctx = Ctx(args)
         return int(args.func(ctx) or 0)

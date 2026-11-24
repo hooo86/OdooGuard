@@ -105,12 +105,24 @@ CREATE TABLE IF NOT EXISTS audit (
 """
 
 
+def _pid_alive(pid: int) -> bool:
+    """Le processus existe-t-il encore et est-ce bien OdooGuard (numéro non réutilisé) ?"""
+    try:
+        with open(f"/proc/{int(pid)}/cmdline", "rb") as fh:
+            return b"odooguard" in fh.read()
+    except OSError:
+        return False
+
+
 class History:
     def __init__(self, path: str):
         self.path = path
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with self._conn() as c:
             c.executescript(SCHEMA)
+            # Migration : numéro du processus qui exécute (détection des exécutions tuées)
+            if "pid" not in {r[1] for r in c.execute("PRAGMA table_info(runs)")}:
+                c.execute("ALTER TABLE runs ADD COLUMN pid INTEGER")
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -127,8 +139,8 @@ class History:
     def start(self, component: str, kind: str) -> int:
         with self._conn() as c:
             cur = c.execute(
-                "INSERT INTO runs(component, kind, started_at, status) VALUES (?,?,?,?)",
-                (component, kind, time.time(), "running"),
+                "INSERT INTO runs(component, kind, started_at, status, pid) VALUES (?,?,?,?,?)",
+                (component, kind, time.time(), "running", os.getpid()),
             )
             return int(cur.lastrowid)
 
@@ -143,16 +155,33 @@ class History:
                  json.dumps(details or {}, default=str), run_id),
             )
 
-    def mark_interrupted(self, max_age: float = 6 * 3600) -> int:
-        """Les exécutions « running » trop anciennes (processus tué) passent en échec."""
+    def mark_interrupted(self, legacy_max_age: float = 24 * 3600) -> int:
+        """Exécutions « running » dont le processus n'existe plus -> échec « interrupted ».
+
+        Arrêt du service, redémarrage de la VM, processus tué : l'exécution n'a pas pu
+        enregistrer sa fin. Lignes antérieures à la colonne pid : interrompues si une
+        exécution plus récente du même composant existe (systemd n'en lance jamais
+        deux à la fois), ou au bout de 24 h.
+        """
+        now = time.time()
         with self._conn() as c:
-            cur = c.execute(
-                "UPDATE runs SET status='failed', category='interrupted', ended_at=?,"
-                " message='exécution interrompue (processus arrêté)'"
-                " WHERE status='running' AND started_at < ?",
-                (time.time(), time.time() - max_age),
-            )
-            return cur.rowcount
+            rows = c.execute("SELECT id, component, started_at, pid FROM runs"
+                             " WHERE status='running'").fetchall()
+            dead = []
+            for r in rows:
+                if r["pid"]:
+                    if not _pid_alive(r["pid"]):
+                        dead.append(r["id"])
+                    continue
+                newer = c.execute("SELECT 1 FROM runs WHERE component=? AND started_at>? LIMIT 1",
+                                  (r["component"], r["started_at"])).fetchone()
+                if newer or r["started_at"] < now - legacy_max_age:
+                    dead.append(r["id"])
+            for run_id in dead:
+                c.execute("UPDATE runs SET status='failed', category='interrupted', ended_at=?,"
+                          " message='exécution interrompue (processus arrêté)' WHERE id=?",
+                          (now, run_id))
+            return len(dead)
 
     def last(self, component: str, status: str | None = None, kind: str | None = None) -> dict | None:
         q = "SELECT * FROM runs WHERE component=?"
