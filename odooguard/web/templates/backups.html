@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Sauvegardes{% endblock %}
 {% block content %}
-<h1>Sauvegardes disponibles</h1>
+<h1>Sauvegardes</h1>
+{% include "_progress.html" %}
+<h2>Sauvegardes disponibles</h2>
 {% for e in errors %}<p class="banner banner-critical" role="alert">{{ e }}</p>{% endfor %}
 <p>Restauration à un instant précis possible
   {% if window[0] %}du <strong>{{ fmt_time(window[0]) }}</strong> jusqu'au dernier WAL reçu ({{ window[1] }}){% else %}: aucune sauvegarde{% endif %}.

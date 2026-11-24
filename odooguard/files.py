@@ -19,7 +19,8 @@ import os
 
 from odooguard.config import Config
 from odooguard.remote import Agent
-from odooguard.util import OdooGuardError, Result, in_business_hours, run
+from odooguard.progress import parse_restic_status, parse_rsync_progress
+from odooguard.util import OdooGuardError, Result, in_business_hours, run, run_streaming
 
 log = logging.getLogger("odooguard")
 
@@ -54,16 +55,26 @@ class Restic:
         return self.exec(*args, timeout=600)
 
     def snapshots(self) -> list[dict]:
-        res = self.exec("snapshots", "--json", "--tag", RESTIC_TAG, timeout=600)
+        # --no-lock : simple lecture, possible même sur un dépôt monté en lecture
+        # seule (service web cloisonné) ou pendant une sauvegarde.
+        res = self.exec("--no-lock", "snapshots", "--json", "--tag", RESTIC_TAG, timeout=600)
         snaps = json.loads(res.stdout or "[]")
         snaps.sort(key=lambda s: s["time"])
         return snaps
 
-    def backup(self, path: str, host: str, tags: list[str]) -> dict:
+    def backup(self, path: str, host: str, tags: list[str], progress=None) -> dict:
         args = ["backup", "--json", "--host", host, "--tag", RESTIC_TAG]
         for t in tags:
             args += ["--tag", t]
-        res = self.exec(*args, path, ok_codes=(0, 3))
+
+        def on_line(line: str) -> None:
+            if progress is not None:
+                st = parse_restic_status(line)
+                if st:
+                    progress.update(**st)
+        # Une ligne d'état toutes les 2 s (progression affichée au tableau de bord)
+        res = run_streaming([self.cfg.restic_bin, *args, path], on_line,
+                            env={**self.env, "RESTIC_PROGRESS_FPS": "0.5"}, ok_codes=(0, 3))
         summary = {}
         for line in res.stdout.splitlines():
             try:
@@ -127,21 +138,35 @@ def mirror_path(cfg: Config, source: str) -> str:
     return os.path.join(cfg.mirror_dir, source.strip("/"))
 
 
-def pull_mirror(cfg: Config) -> dict:
+def rsync_progress_cb(progress):
+    """Fonction de rappel : lignes « rsync --info=progress2 » -> progression."""
+    def on_line(line: str) -> None:
+        if progress is not None:
+            st = parse_rsync_progress(line)
+            if st:
+                progress.update(**st)
+    return on_line
+
+
+def pull_mirror(cfg: Config, progress=None) -> dict:
     """Synchronise chaque source de server01 vers le miroir local (rsync pull)."""
     agent = Agent(cfg.source)
     stats = {}
-    for src in cfg.file_sources:
+    n = len(cfg.file_sources)
+    for i, src in enumerate(cfg.file_sources, 1):
+        if progress is not None:
+            progress.update(phase=f"1/2 synchronisation depuis server01 ({i}/{n}) : {src}")
         dest = mirror_path(cfg, src)
         os.makedirs(dest, exist_ok=True)
+        # --no-inc-recursive : liste complète d'abord, donc pourcentage global fiable
         cmd = ["rsync", "-a", "--numeric-ids", "--delete", "--delete-delay", "--stats",
-               "--timeout=600", "-e", agent.rsync_ssh()]
+               "--info=progress2", "--no-inc-recursive", "--timeout=600", "-e", agent.rsync_ssh()]
         if in_business_hours() and cfg.rsync_bwlimit_day:
             cmd.append(f"--bwlimit={cfg.rsync_bwlimit_day}")
         for ex in cfg.rsync_excludes:
             cmd.append(f"--exclude={ex}")
         cmd += [agent.rsync_source(src.rstrip("/") + "/"), dest.rstrip("/") + "/"]
-        res = run(cmd, ok_codes=RSYNC_OK)
+        res = run_streaming(cmd, rsync_progress_cb(progress), ok_codes=RSYNC_OK)
         stats[src] = _rsync_stats(res.stdout)
         if res.returncode == 24:
             log.info("rsync %s : fichiers disparus pendant la copie (normal)", src)

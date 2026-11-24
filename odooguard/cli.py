@@ -13,6 +13,7 @@ import logging
 import os
 import pwd
 import sys
+import threading
 import time
 
 from odooguard import __version__, notify
@@ -23,6 +24,7 @@ from odooguard.audit import Auditor, confirm_destructive
 from odooguard.files import Restic, pull_mirror
 from odooguard.history import History
 from odooguard.pg import PgBackRest, WalIngest
+from odooguard.progress import Progress
 from odooguard.restore import Restorer
 from odooguard.util import (OdooGuardError, check_free_space, file_lock, fmt_age,
                             fmt_size, fmt_time, io_probe, parse_time, run)
@@ -86,7 +88,29 @@ def cmd_backup(ctx: Ctx) -> int:
         def job():
             preflight_local(ctx)
             pg = PgBackRest(cfg)
-            pg.backup(a.type)
+            kind_fr = {"full": "complète", "diff": "différentielle", "incr": "incrémentale"}[a.type]
+            with Progress(cfg.state_dir, "db", f"Base PostgreSQL ({kind_fr})") as prog:
+                prog.update(phase="point de contrôle PostgreSQL et préparation")
+                stop = threading.Event()
+
+                def poll():
+                    # pgBackRest publie taille totale et taille copiée (mise à jour
+                    # à chaque fichier terminé) : lue toutes les 10 s.
+                    while not stop.wait(10):
+                        try:
+                            lk = pg.backup_progress()
+                        except Exception:  # noqa: BLE001
+                            continue
+                        if lk and lk.get("size"):
+                            prog.update(phase=f"copie des fichiers de la base ({kind_fr})",
+                                        bytes_total=lk["size"], bytes_done=lk.get("size-cplt", 0))
+                t = threading.Thread(target=poll, daemon=True)
+                t.start()
+                try:
+                    pg.backup(a.type)
+                finally:
+                    stop.set()
+                    t.join(timeout=15)
             last = pg.info().last()
             return {"label": last.label, "size": last.size, "added": last.repo_delta,
                     "duration": last.duration}
@@ -99,8 +123,11 @@ def cmd_backup(ctx: Ctx) -> int:
             io_probe(cfg.restic_repo)
             from odooguard.remote import Agent
             Agent(cfg.source).call("export", timeout=600)  # pip freeze, paquets, versions
-            stats = pull_mirror(cfg)
-            summ = Restic(cfg).backup(cfg.mirror_dir, host=cfg.source.host, tags=["files"])
+            with Progress(cfg.state_dir, "files", "Filestore, modules, configuration") as prog:
+                stats = pull_mirror(cfg, progress=prog)
+                prog.update(phase="2/2 instantané restic (dédupliqué, chiffré)")
+                summ = Restic(cfg).backup(cfg.mirror_dir, host=cfg.source.host, tags=["files"],
+                                          progress=prog)
             return {"label": summ["snapshot_id"][:8], "size": summ.get("total_bytes_processed"),
                     "added": summ.get("data_added"), "rsync": stats}
         with file_lock(cfg.lock_dir, "files", wait=a.wait):
@@ -117,9 +144,12 @@ def cmd_backup(ctx: Ctx) -> int:
             def job(dest=dest):
                 probe = dest_mod.preflight(dest)
                 # Sous les deux verrous : aucune sauvegarde ne modifie les dépôts pendant la copie
-                with file_lock(cfg.lock_dir, "db", wait=3600), file_lock(cfg.lock_dir, "files", wait=3600):
-                    pgr = dest_mod.copy_pgbackrest(cfg, dest)
+                with file_lock(cfg.lock_dir, "db", wait=3600), file_lock(cfg.lock_dir, "files", wait=3600), \
+                        Progress(cfg.state_dir, f"copy:{dest.name}", f"Copie vers {dest.name}") as prog:
+                    pgr = dest_mod.copy_pgbackrest(cfg, dest, progress=prog)
+                    prog.update(phase=f"copie du dépôt fichiers (restic) vers {dest.name}")
                     rr = dest_mod.copy_restic(cfg, dest)
+                    prog.update(phase="écriture du manifeste de vérification")
                     # Référence pour la copie hors ligne G:\ (phase 3 bis)
                     man = dest_mod.write_manifest(cfg, dest, pgr["label"], rr["snapshots"])
                 return {"label": pgr["label"], "message": "copie vérifiée", "size": man["total_bytes"],

@@ -189,6 +189,17 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         return page(request, "history.html", user=user, runs=rows, component=component,
                     components=comps)
 
+    def progress_list() -> list[dict]:
+        from odooguard.progress import read_all
+        return read_all(cfg.state_dir)
+
+    @app.get("/partials/progress", response_class=HTMLResponse)
+    def partial_progress(request: Request):
+        user, redirect = login_required(request)
+        if redirect:
+            return redirect
+        return page(request, "_progress.html", user=user, progress=progress_list())
+
     @app.get("/backups", response_class=HTMLResponse)
     def backups(request: Request):
         user, redirect = login_required(request)
@@ -209,7 +220,7 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"restic : {exc}")
         return page(request, "backups.html", user=user, db=db, files=files, errors=errors,
-                    window=window)
+                    window=window, progress=progress_list())
 
     @app.get("/alerts", response_class=HTMLResponse)
     def alerts(request: Request):

@@ -113,6 +113,62 @@ def run(
     return res
 
 
+def run_streaming(cmd: Sequence[str], on_line, *, env: dict[str, str] | None = None,
+                  ok_codes: Sequence[int] = (0,), timeout: float | None = None) -> Result:
+    """Comme run(), mais appelle on_line(ligne) au fil de l'eau sur la sortie standard.
+
+    Les lignes sont découpées sur \\n ET \\r (barres de progression de rsync).
+    """
+    full_env = os.environ.copy()
+    if env:
+        full_env.update(env)
+    log.debug("exec (flux): %s", shlex.join(cmd))
+    start = time.monotonic()
+    try:
+        proc = subprocess.Popen(list(cmd), env=full_env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, bufsize=0)
+    except FileNotFoundError as exc:
+        raise OdooGuardError(f"commande introuvable : {cmd[0]}", "config") from exc
+    err_chunks: list[bytes] = []
+
+    def _drain_err():
+        for chunk in iter(lambda: proc.stderr.read(65536), b""):
+            err_chunks.append(chunk)
+    import threading
+    t = threading.Thread(target=_drain_err, daemon=True)
+    t.start()
+    out_lines: list[str] = []
+    buf = b""
+    deadline = start + timeout if timeout else None
+    for chunk in iter(lambda: proc.stdout.read(65536), b""):
+        buf += chunk
+        parts = re.split(rb"[\r\n]", buf)
+        buf = parts.pop()
+        for raw in parts:
+            line = raw.decode("utf-8", "replace")
+            if not line.strip():
+                continue
+            out_lines.append(line)
+            if len(out_lines) > 20000:
+                del out_lines[:10000]
+            try:
+                on_line(line)
+            except Exception as exc:  # noqa: BLE001 - la progression ne doit jamais bloquer
+                log.debug("progression : %s", exc)
+        if deadline and time.monotonic() > deadline:
+            proc.kill()
+            raise OdooGuardError(f"délai dépassé ({timeout}s) : {shlex.join(cmd)}", "timeout")
+    if buf.strip():
+        out_lines.append(buf.decode("utf-8", "replace"))
+    rc = proc.wait()
+    t.join(timeout=10)
+    res = Result(rc, "\n".join(out_lines), b"".join(err_chunks).decode("utf-8", "replace"),
+                 time.monotonic() - start)
+    if rc not in ok_codes:
+        raise CommandError(cmd, rc, (res.stderr + "\n" + res.stdout[-4000:]).strip())
+    return res
+
+
 @contextmanager
 def file_lock(lock_dir: str, name: str, *, wait: float = 0) -> Iterator[None]:
     """Verrou exclusif (flock) : empêche deux sauvegardes concurrentes.

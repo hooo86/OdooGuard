@@ -123,6 +123,18 @@ class PgBackRest:
         res = self.exec(*args, "info", timeout=300)
         return parse_info(res.stdout, self.cfg.stanza)
 
+    def backup_progress(self) -> dict | None:
+        """Progression de la sauvegarde en cours (verrou « backup » de pgBackRest).
+
+        Renvoie {"held": True, "size": total, "size-cplt": copié} ou None. Le compteur
+        est mis à jour par pgBackRest à chaque fichier de données terminé.
+        """
+        res = self.exec("--output=json", "info", timeout=120)
+        data = json.loads(res.stdout)
+        entry = next((s for s in data if s.get("name") == self.cfg.stanza), None)
+        lock = (((entry or {}).get("status") or {}).get("lock") or {}).get("backup") or {}
+        return lock if lock.get("held") else None
+
     # -------------------------------------------------------------- actions
     def backup(self, kind: str) -> Result:
         if kind not in ("full", "diff", "incr"):
