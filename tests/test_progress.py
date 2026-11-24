@@ -22,6 +22,22 @@ def test_parse_rsync():
     assert progress.parse_rsync_progress("Number of files: 41 (reg: 40)") is None
 
 
+def test_parse_rsync_locales():
+    # Système en français (cas réel de la VM OdooGuard) : point des milliers, virgule décimale
+    fr = progress.parse_rsync_progress("  8.123.456.789  19%   31,20MB/s    0:04:08  ")
+    assert fr["bytes_done"] == 8123456789 and fr["percent"] == 19
+    assert abs(fr["speed_bps"] - 31.2 * 1024**2) < 1
+    en = progress.parse_rsync_progress("  8,123,456,789  19%   31.20MB/s    0:04:08  ")
+    assert en["bytes_done"] == 8123456789
+    nbsp = progress.parse_rsync_progress("8\u202f123\u202f456  2%  1,00kB/s  0:00:01")
+    assert nbsp["bytes_done"] == 8123456
+
+
+def test_rsync_runs_with_neutral_locale():
+    from odooguard.files import RSYNC_ENV
+    assert RSYNC_ENV["LC_ALL"].startswith("C")
+
+
 def test_parse_restic():
     p = progress.parse_restic_status(RESTIC)
     assert p["percent"] == pytest.approx(71.61, abs=0.01) and p["bytes_total"] == 200_000_000

@@ -138,6 +138,11 @@ def mirror_path(cfg: Config, source: str) -> str:
     return os.path.join(cfg.mirror_dir, source.strip("/"))
 
 
+# Sortie de rsync au format numérique neutre, quelle que soit la langue du système
+# (en français, rsync écrit « 8.123.456 » et « 31,20MB/s »).
+RSYNC_ENV = {"LC_ALL": "C.UTF-8"}
+
+
 def rsync_progress_cb(progress):
     """Fonction de rappel : lignes « rsync --info=progress2 » -> progression."""
     def on_line(line: str) -> None:
@@ -166,7 +171,7 @@ def pull_mirror(cfg: Config, progress=None) -> dict:
         for ex in cfg.rsync_excludes:
             cmd.append(f"--exclude={ex}")
         cmd += [agent.rsync_source(src.rstrip("/") + "/"), dest.rstrip("/") + "/"]
-        res = run_streaming(cmd, rsync_progress_cb(progress), ok_codes=RSYNC_OK)
+        res = run_streaming(cmd, rsync_progress_cb(progress), env=RSYNC_ENV, ok_codes=RSYNC_OK)
         stats[src] = _rsync_stats(res.stdout)
         if res.returncode == 24:
             log.info("rsync %s : fichiers disparus pendant la copie (normal)", src)

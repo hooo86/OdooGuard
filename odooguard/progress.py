@@ -121,7 +121,7 @@ def read_all(state_dir: str) -> list[dict]:
 
 # ------------------------------------------------------------------ analyse des sorties
 RSYNC_PROGRESS_RE = re.compile(
-    r"^\s*([\d,.]+)\s+(\d{1,3})%\s+([\d.,]+)([kMGT]?B)/s\s+(\d+:\d{2}:\d{2})")
+    r"^\s*(\d[\d,.'\u00a0\u202f]*)\s+(\d{1,3})%\s+([\d.,]+)([kMGT]?B)/s\s+(\d+:\d{2}:\d{2})")
 _UNITS = {"B": 1, "kB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
 
 
@@ -130,7 +130,9 @@ def parse_rsync_progress(line: str) -> dict | None:
     m = RSYNC_PROGRESS_RE.match(line)
     if not m:
         return None
-    done = float(m.group(1).replace(",", ""))
+    # Séparateur des milliers selon la langue du système : « 8,123,456 » (anglais),
+    # « 8.123.456 » (français : rsync prend le point quand la virgule est décimale)...
+    done = float(re.sub(r"\D", "", m.group(1)))
     pct = float(m.group(2))
     speed = float(m.group(3).replace(",", ".")) * _UNITS.get(m.group(4), 1)
     # Pas de total déduit du pourcentage (arrondi à l'unité : trop imprécis au début)
