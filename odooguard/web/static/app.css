@@ -131,3 +131,11 @@ progress::-moz-progress-bar { background: var(--series-1); border-radius: 6px; }
 .launch-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
 .launch-buttons form { margin: 0; }
 .banner-info { background: var(--surface-1); border-left: 4px solid var(--series-1); }
+/* Réglages */
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.settings-card { display: grid; gap: 6px; text-decoration: none; color: var(--text-primary); }
+.settings-card:hover { border-color: var(--series-1); }
+.inline-fields { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: end; }
+.inline-fields label { display: grid; gap: 4px; }
+textarea { font: 13px ui-monospace, Menlo, monospace; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-0); color: var(--text-primary); width: 100%; }
+legend label.radio { display: inline-flex; gap: 6px; }

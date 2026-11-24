@@ -83,7 +83,7 @@ def test_write_destination_replace_add_remove(tmp_path):
     nas.write_destination(str(p), "nas1", None)
     s = p.read_text()
     assert "[destination:nas1]" not in s and "[destination:nas9]" in s and "[restic]" in s
-    assert (tmp_path / "c.conf.avant-nas").exists()
+    assert (tmp_path / "c.conf.avant-tableau-de-bord").exists()
     import configparser
     configparser.ConfigParser(interpolation=None).read_string(s)  # toujours valide
 

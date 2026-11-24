@@ -20,7 +20,7 @@
     <a href="/history" {% if request.url.path == '/history' %}aria-current="page"{% endif %}>Historique</a>
     <a href="/restore-tests" {% if request.url.path.startswith('/restore-tests') %}aria-current="page"{% endif %}>Tests de restauration</a>
     {% if role in ('operateur', 'admin') %}<a href="/restore" {% if request.url.path.startswith('/restore') and not request.url.path.startswith('/restore-tests') %}aria-current="page"{% endif %}>Restaurer</a>{% endif %}
-    <a href="/nas" {% if request.url.path.startswith('/nas') %}aria-current="page"{% endif %}>NAS</a>
+    <a href="/reglages" {% if request.url.path.split('/')[1] in ('reglages', 'nas', 'planification', 'notifications', 'utilisateurs') %}aria-current="page"{% endif %}>Réglages</a>
     <a href="/alerts" {% if request.url.path == '/alerts' %}aria-current="page"{% endif %}>Alertes</a>
     <a href="/audit" {% if request.url.path == '/audit' %}aria-current="page"{% endif %}>Audit</a>
   </nav>

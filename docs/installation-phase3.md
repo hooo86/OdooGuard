@@ -253,6 +253,35 @@ quatre actions (`apply`, `ensure`, `status`, `remove`), valide chaque argument, 
 point de montage et les options de montage. Le mot de passe passe par l'entrée standard,
 jamais par la ligne de commande.
 
+## 5 ter. Planification, notifications et utilisateurs depuis le tableau de bord
+
+Menu **Réglages**. La consultation est ouverte à tous les rôles, la modification est
+réservée au rôle admin.
+
+| Page | Ce qu'on y fait |
+|---|---|
+| **Planification** | Pour chaque type (base complète, différentielle, incrémentale, fichiers, copie NAS, vérifications, maintenance, test de restauration) : la planification actuelle et la prochaine exécution. On peut la modifier (heures fixes certains jours, toutes les heures sur une plage, intervalle régulier, ou expression systemd avancée), la suspendre ou l'activer, ou rétablir la planification d'origine. |
+| **Notifications** | Serveur SMTP (serveur, port, sécurité, compte, mot de passe, expéditeur, destinataires), bot Telegram (jeton, conversations, proxy), niveau minimal, rappel, message « résolu ». Bouton **Envoyer un message de test**, et bouton **Trouver mes conversations Telegram** qui affiche l'identifiant à renseigner. |
+| **Utilisateurs** | Créer un compte, changer son rôle, réinitialiser son mot de passe (12 caractères minimum), le supprimer. On ne peut ni se supprimer soi-même, ni supprimer ou rétrograder le dernier administrateur. |
+
+Fonctionnement :
+- chaque changement est appliqué par `odooguard-jobs`, qui affiche le résultat, puis tracé
+  dans l'audit ;
+- la configuration modifiée est vérifiée après écriture. Si elle devient illisible,
+  l'ancienne version est rétablie automatiquement, et une copie
+  `odooguard.conf.avant-tableau-de-bord` est conservée ;
+- **les secrets** (mot de passe SMTP, jeton Telegram, mots de passe des comptes) ne sont
+  jamais réaffichés ni écrits dans la base ou l'audit. Le mot de passe d'un compte est
+  haché par le tableau de bord avant transmission ;
+- la planification est écrite dans un fichier complémentaire
+  `/etc/systemd/system/<minuteur>.d/odooguard-planification.conf`, par le programme root
+  `odooguard-schedule-helper`. Ce programme n'accepte que les minuteurs OdooGuard (le
+  contrôle d'état toutes les 5 min n'est pas modifiable) et des expressions validées par
+  `systemd-analyze`.
+
+Si vous espacez une sauvegarde, adaptez les seuils d'alerte correspondants
+(`[thresholds]`), sinon une alerte « trop ancienne » apparaîtra.
+
 ## 6. Retour arrière
 
 ```bash

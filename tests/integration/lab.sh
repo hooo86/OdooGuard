@@ -252,7 +252,7 @@ v=$(runuser -u nobody -- /usr/local/bin/odooguard-zabbix rpo db)
 if runuser -u nobody -- cat /var/lib/odooguard/history.db >/dev/null 2>&1; then ko "nobody lit l'historique !"; else ok "historique privé inaccessible à Zabbix"; fi
 
 step "14. Tableau de bord HTTPS et rapport Veeam"
-ODOOGUARD_NEW_PASSWORD='motdepasse-labo-12' $OG web-user add admin >/dev/null && ok "compte web créé" || ko "web-user"
+ODOOGUARD_NEW_PASSWORD='motdepasse-labo-12' $OG web-user add admin admin >/dev/null && ok "compte web créé" || ko "web-user"
 (cd / && runuser -u odooguard -- env PYTHONPATH=/opt/odooguard nohup /opt/odooguard/venv/bin/python -m odooguard web >/tmp/lab-web.log 2>&1 &)
 for i in $(seq 1 20); do curl -sk -o /dev/null https://127.0.0.1:8443/healthz && break; sleep 1; done
 code=$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/)
@@ -357,6 +357,55 @@ st=$(sqlite3 /var/lib/odooguard/history.db "select status||' '||user from jobs o
 v=$(psqlp -d LNHC_web_copie -c "select value from ir_config_parameter where key='database.is_neutralized'" 2>/dev/null || echo "?")
 [[ "$v" == "True" ]] && ok "copie web créée et neutralisée" || ko "copie web : $v"
 grep -q '"actor": "web:oscar"' /var/log/odooguard/audit.log && ok "audit : auteur web:oscar" || ko "audit auteur web"
+step "18. Réglages depuis le tableau de bord : notifications, comptes, planification"
+runuser -u odooguard -- sudo -n -l /usr/local/sbin/odooguard-schedule-helper >/dev/null 2>&1 \
+  && ok "sudoers : programme de planification autorisé" || ko "sudoers : programme de planification"
+rm -f /tmp/lab-fake/*
+python3 - <<'PY' && ok "réglages SMTP/Telegram et compte demandés depuis le tableau de bord" || ko "réglages web"
+import html, http.cookiejar, re, ssl, urllib.parse, urllib.request
+ctx = ssl._create_unverified_context()
+op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+                                 urllib.request.HTTPSHandler(context=ctx))
+B = "https://127.0.0.1:8443"
+def post(path, data):
+    return op.open(B + path, urllib.parse.urlencode(data).encode()).read().decode()
+post("/login", {"username": "admin", "password": "motdepasse-labo-12"})
+tok = re.search(r'name="csrf" value="([^"]+)"', op.open(B + "/notifications").read().decode()).group(1)
+r = post("/notifications/save", {"csrf": tok, "use_email": "on", "use_telegram": "on", "send_resolved": "on",
+                                 "min_level": "warning", "repeat_hours": "4", "smtp_host": "127.0.0.1",
+                                 "smtp_port": "2525", "smtp_security": "none", "smtp_user": "",
+                                 "mail_from": "odooguard@labo.local", "mail_to": "it@labo.local",
+                                 "telegram_token": "123456789:" + "C" * 35, "telegram_chat_ids": "-100777",
+                                 "https_proxy": ""})
+assert "Travail n°" in r, re.findall(r'banner[^>]*>([^<]+)', r)
+tok = re.search(r'name="csrf" value="([^"]+)"', op.open(B + "/utilisateurs").read().decode()).group(1)
+r = post("/utilisateurs/save", {"csrf": tok, "name": "marie", "role": "operateur",
+                                "password": "motdepasse-marie", "password2": "motdepasse-marie"})
+assert "Travail n°" in r
+PY
+(cd / && runuser -u odooguard -- /usr/local/bin/odooguard jobs-worker --once >/tmp/lab-jobs2.log 2>&1)
+grep -q "^api = http://127.0.0.1:8081" /etc/odooguard/odooguard.conf || sed -i 's|^\[telegram\]$|[telegram]\napi = http://127.0.0.1:8081|' /etc/odooguard/odooguard.conf
+grep -q "chat_ids = -100777" /etc/odooguard/odooguard.conf && ok "configuration [smtp]/[telegram] écrite par odooguard-jobs" || { ko "configuration notifications"; tail -5 /tmp/lab-jobs2.log; }
+grep -q "CCCC" /etc/odooguard/odooguard.conf /var/lib/odooguard/history.db 2>/dev/null && ko "jeton Telegram en clair !" || ok "jeton Telegram absent de la configuration et de l'historique"
+python3 - <<'PY' && ok "message de test demandé" || ko "message de test"
+import http.cookiejar, re, ssl, urllib.parse, urllib.request
+ctx = ssl._create_unverified_context()
+op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+                                 urllib.request.HTTPSHandler(context=ctx))
+B = "https://127.0.0.1:8443"
+op.open(B + "/login", urllib.parse.urlencode({"username": "marie", "password": "motdepasse-marie"}).encode())
+assert "Base PostgreSQL" in op.open(B + "/").read().decode()   # le nouveau compte se connecte
+op2 = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+                                  urllib.request.HTTPSHandler(context=ctx))
+op2.open(B + "/login", urllib.parse.urlencode({"username": "admin", "password": "motdepasse-labo-12"}).encode())
+tok = re.search(r'name="csrf" value="([^"]+)"', op2.open(B + "/notifications").read().decode()).group(1)
+op2.open(B + "/notifications/test", urllib.parse.urlencode({"csrf": tok}).encode())
+PY
+(cd / && runuser -u odooguard -- /usr/local/bin/odooguard jobs-worker --once >>/tmp/lab-jobs2.log 2>&1)
+nm=$(ls /tmp/lab-fake/mail-*.eml 2>/dev/null | wc -l); nt=$(ls /tmp/lab-fake/telegram-*.txt 2>/dev/null | wc -l)
+[[ $nm -ge 1 && $nt -ge 1 ]] && ok "message de test reçu (e-mail + Telegram) avec les réglages du tableau de bord" || { ko "test : $nm e-mail, $nt Telegram"; tail -5 /tmp/lab-jobs2.log; }
+grep -qs "bot123456789:CCCC" /tmp/lab-fake/telegram-*.txt && ok "nouveau jeton Telegram utilisé" || ko "jeton Telegram non utilisé"
+
 pkill -f "odooguard web" || true; pkill -f fake_services.py || true
 
 echo; echo "Résultat : $pass OK, $fail échec(s)"

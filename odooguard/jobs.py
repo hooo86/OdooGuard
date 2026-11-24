@@ -32,6 +32,8 @@ log = logging.getLogger("odooguard")
 
 ROLES = ("lecteur", "operateur", "admin")
 
+ADMIN_JOBS = ("schedule", "notify-save", "notify-test", "telegram-discover", "user-save", "user-delete")
+
 # Sauvegardes lançables depuis le tableau de bord -> service systemd (le même que
 # celui des planifications : mêmes verrous, alertes OnFailure, journaux, progression).
 BACKUP_UNITS = {
@@ -148,6 +150,31 @@ def run_job(cfg: Config, history: History, job: dict) -> None:
                     raise
                 history.finish(run_id, "success", message=f"{v['db']} -> {v['as_name']} ({v['target']})",
                                details=result)
+        elif job["kind"] in ADMIN_JOBS:
+            # Réglages (planification, notifications, comptes) : rôle admin, configuration relue
+            if not can(job["role"], "admin"):
+                raise OdooGuardError("droits insuffisants (rôle admin requis)", "usage")
+            from odooguard import config as config_mod
+            from odooguard import schedule, settings
+            fresh = config_mod.load(cfg.path)
+            kind = job["kind"]
+            if kind == "schedule":
+                result = schedule.job_schedule(params)
+            elif kind == "notify-save":
+                result = settings.job_notify_save(fresh, params)
+            elif kind == "notify-test":
+                result = settings.job_notify_test(fresh, history)
+            elif kind == "telegram-discover":
+                result = settings.job_telegram_discover(fresh, params)
+            elif kind == "user-save":
+                result = settings.job_user_save(fresh, params, job["user"])
+            else:
+                result = settings.job_user_delete(fresh, params, job["user"])
+            log.info("%s", result.get("message", ""))
+            if kind not in ("notify-test", "telegram-discover"):
+                safe = {k: v for k, v in params.items() if not k.endswith("_token") and k != "confirm"}
+                auditor.record(kind, str(params.get("timer") or params.get("name") or "notifications"),
+                               "success", **safe)
         elif job["kind"] == "backup-start":
             if not can(job["role"], "operateur"):
                 raise OdooGuardError("droits insuffisants (rôle opérateur requis)", "usage")

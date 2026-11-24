@@ -1,0 +1,329 @@
+"""Réglages modifiables depuis le tableau de bord : notifications, comptes.
+
+Même chaîne que pour les NAS : le service web (cloisonné, /etc en lecture
+seule) enregistre une demande ; le service odooguard-jobs la re-valide et
+l'applique. Les secrets (mot de passe SMTP, jeton Telegram, empreinte de mot
+de passe d'un compte) ne passent jamais par la base : ils sont déposés dans un
+fichier 600 à usage unique, lu puis effacé par le service de travaux.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import secrets
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+from odooguard.config import Config
+from odooguard.util import OdooGuardError
+
+SECRET_TTL = 3600
+SECTION_RE = re.compile(r"^\s*\[([^\]]+)\]\s*$")
+
+
+# ------------------------------------------------------------------ secrets à usage unique
+def _secrets_dir(cfg: Config) -> str:
+    d = os.path.join(cfg.state_dir, "pending-secrets")
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    return d
+
+
+def stash_secret(cfg: Config, value: str) -> str:
+    if len(value) > 512 or "\n" in value or "\x00" in value:
+        raise OdooGuardError("valeur secrète invalide (une ligne, 512 caractères au plus)", "usage")
+    token = secrets.token_hex(16)
+    fd = os.open(os.path.join(_secrets_dir(cfg), token), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(value)
+    return token
+
+
+def take_secret(cfg: Config, token: str | None) -> str:
+    purge_stale_secrets(cfg)
+    if not token:
+        return ""
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise OdooGuardError("jeton de secret invalide", "usage")
+    path = os.path.join(_secrets_dir(cfg), token)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        raise OdooGuardError("secret expiré : ressaisir le formulaire", "usage") from None
+    finally:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
+def purge_stale_secrets(cfg: Config) -> None:
+    d = _secrets_dir(cfg)
+    for f in os.listdir(d):
+        path = os.path.join(d, f)
+        try:
+            if time.time() - os.stat(path).st_mtime > SECRET_TTL:
+                os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
+def write_secret_file(path: str, value: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(value + "\n")
+    os.replace(tmp, path)
+
+
+# ------------------------------------------------------------------ fichier de configuration
+def write_section(cfg_path: str, header: str, values: dict | None, comment: str = "") -> None:
+    """Remplace (ou ajoute, ou retire si values=None) la section [header].
+
+    Les autres sections et les commentaires hors de cette section sont conservés.
+    Copie de sécurité : <fichier>.avant-tableau-de-bord.
+    """
+    with open(cfg_path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines(keepends=True)
+    start = end = None
+    for i, line in enumerate(lines):
+        m = SECTION_RE.match(line)
+        if m and m.group(1).strip() == header:
+            start = i
+        elif m and start is not None and end is None:
+            end = i
+    if start is not None and end is None:
+        end = len(lines)
+    block: list[str] = []
+    if values is not None:
+        block = [f"[{header}]\n", f"# {comment or 'Modifié depuis le tableau de bord'}\n"]
+        for k, v in values.items():
+            if "\n" in str(v):
+                raise OdooGuardError(f"valeur invalide pour {k}", "usage")
+            block.append(f"{k} = {v}\n")
+        block.append("\n")
+    if start is None:
+        new = lines + (["\n"] if lines and lines[-1].strip() else []) + block
+    else:
+        new = lines[:start] + block + lines[end:]
+    from odooguard import config as config_mod
+    try:
+        config_mod.load(cfg_path, strict_perms=False)
+        was_valid = True
+    except config_mod.ConfigError:
+        was_valid = False
+    st = os.stat(cfg_path)
+    backup = cfg_path + ".avant-tableau-de-bord"
+    with open(backup, "w", encoding="utf-8") as fh:
+        fh.writelines(lines)
+    os.chmod(backup, 0o600)
+    tmp = cfg_path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.writelines(new)
+    try:
+        os.chown(tmp, st.st_uid, st.st_gid)
+    except PermissionError:
+        pass
+    os.replace(tmp, cfg_path)
+    # Vérification : un fichier valide doit le rester, sinon retour à l'ancienne version
+    if not was_valid:
+        return
+    try:
+        config_mod.load(cfg_path, strict_perms=False)
+    except config_mod.ConfigError as exc:
+        os.replace(backup, cfg_path)
+        raise OdooGuardError(f"configuration refusée, ancienne version restaurée : {exc}", "config") from None
+
+
+# ------------------------------------------------------------------ notifications
+EMAIL_RE = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")
+HOST_RE = re.compile(r"^[A-Za-z0-9.-]{1,253}$")
+CHAT_RE = re.compile(r"^-?\d{1,20}$|^@[A-Za-z0-9_]{5,32}$")
+PROXY_RE = re.compile(r"^https?://[A-Za-z0-9.:@_-]+/?$")
+
+
+def _split(v) -> list[str]:
+    return [x.strip() for x in re.split(r"[,;\s]+", str(v or "")) if x.strip()]
+
+
+def validate_notifications(p: dict) -> dict:
+    channels = ["journal"] + [c for c in ("email", "telegram") if p.get(f"use_{c}")]
+    min_level = p.get("min_level", "warning")
+    if min_level not in ("warning", "critical"):
+        raise OdooGuardError("niveau minimal : warning ou critical", "usage")
+    try:
+        repeat = float(p.get("repeat_hours", 4))
+    except (TypeError, ValueError):
+        raise OdooGuardError("rappel : nombre d'heures", "usage") from None
+    if not 0.25 <= repeat <= 168:
+        raise OdooGuardError("rappel : entre 0,25 et 168 heures", "usage")
+    host = str(p.get("smtp_host", "")).strip()
+    if host and not HOST_RE.match(host):
+        raise OdooGuardError("serveur SMTP : nom ou adresse IP", "usage")
+    try:
+        port = int(p.get("smtp_port") or 587)
+    except ValueError:
+        raise OdooGuardError("port SMTP invalide", "usage") from None
+    if not 1 <= port <= 65535:
+        raise OdooGuardError("port SMTP invalide", "usage")
+    security = p.get("smtp_security", "starttls")
+    if security not in ("starttls", "ssl", "none"):
+        raise OdooGuardError("sécurité SMTP : starttls, ssl ou none", "usage")
+    user = str(p.get("smtp_user", "")).strip()
+    if user and not re.fullmatch(r"[^\s,;]{1,128}", user):
+        raise OdooGuardError("compte SMTP invalide", "usage")
+    mail_from = str(p.get("mail_from", "")).strip()
+    mail_to = _split(p.get("mail_to"))
+    for addr in ([mail_from] if mail_from else []) + mail_to:
+        if not EMAIL_RE.match(addr):
+            raise OdooGuardError(f"adresse e-mail invalide : {addr}", "usage")
+    chats = _split(p.get("telegram_chat_ids"))
+    for c in chats:
+        if not CHAT_RE.match(c):
+            raise OdooGuardError(f"identifiant Telegram invalide : {c} (nombre, ex. -1001234567890)", "usage")
+    proxy = str(p.get("https_proxy", "")).strip()
+    if proxy and not PROXY_RE.match(proxy):
+        raise OdooGuardError("proxy : http://hôte:port", "usage")
+    if "email" in channels and not (host and mail_from and mail_to):
+        raise OdooGuardError("e-mail activé : serveur, expéditeur et destinataires sont obligatoires", "usage")
+    if "telegram" in channels and not chats:
+        raise OdooGuardError("Telegram activé : au moins un identifiant de conversation", "usage")
+    return {"channels": channels, "min_level": min_level, "repeat_hours": repeat,
+            "send_resolved": bool(p.get("send_resolved")), "smtp_host": host, "smtp_port": port,
+            "smtp_security": security, "smtp_user": user, "mail_from": mail_from, "mail_to": mail_to,
+            "telegram_chat_ids": chats, "https_proxy": proxy}
+
+
+def job_notify_save(cfg: Config, params: dict) -> dict:
+    v = validate_notifications(params)
+    a = cfg.alerts
+    smtp_pw_file = a.smtp_password_file or os.path.join(os.path.dirname(cfg.path), "smtp.pass")
+    tg_file = a.telegram_token_file or os.path.join(os.path.dirname(cfg.path), "telegram.token")
+    smtp_pw = take_secret(cfg, params.get("smtp_password_token"))
+    token = take_secret(cfg, params.get("telegram_token_token"))
+    if token and not re.fullmatch(r"\d{5,15}:[A-Za-z0-9_-]{30,64}", token):
+        raise OdooGuardError("jeton Telegram invalide (forme 123456789:ABC...)", "usage")
+    if smtp_pw:
+        write_secret_file(smtp_pw_file, smtp_pw)
+    if token:
+        write_secret_file(tg_file, token)
+    if "telegram" in v["channels"] and not token and not _nonempty(tg_file):
+        raise OdooGuardError("Telegram activé : jeton du bot obligatoire", "usage")
+    write_section(cfg.path, "alerts", {
+        "channels": ", ".join(v["channels"]), "min_level": v["min_level"],
+        "repeat_hours": f"{v['repeat_hours']:g}", "send_resolved": "yes" if v["send_resolved"] else "no"})
+    write_section(cfg.path, "smtp", {
+        "host": v["smtp_host"], "port": v["smtp_port"], "security": v["smtp_security"],
+        "user": v["smtp_user"], "password_file": smtp_pw_file, "from": v["mail_from"],
+        "to": ", ".join(v["mail_to"])})
+    write_section(cfg.path, "telegram", {
+        "token_file": tg_file, "chat_ids": ", ".join(v["telegram_chat_ids"]),
+        "api": a.telegram_api, "https_proxy": v["https_proxy"]})
+    return {"channels": v["channels"], "smtp_password_changed": bool(smtp_pw),
+            "telegram_token_changed": bool(token),
+            "message": "réglages des notifications enregistrés (canaux : " + ", ".join(v["channels"]) + ")"}
+
+
+def _nonempty(path: str) -> bool:
+    try:
+        return os.path.getsize(path) > 0
+    except OSError:
+        return False
+
+
+def job_notify_test(cfg: Config, history) -> dict:
+    from odooguard import notify
+    res = notify.dispatch(cfg, "warning", "message de test",
+                          "Si vous lisez ceci, ce canal d'alerte OdooGuard fonctionne.",
+                          key="test", history=history, force_all=True)
+    failed = {k: v for k, v in res.items() if v != "ok"}
+    if failed:
+        raise OdooGuardError("échec d'envoi : " + " ; ".join(f"{k} : {v}" for k, v in failed.items()), "command")
+    return {"channels": res, "message": "message de test envoyé : " + ", ".join(res)}
+
+
+def job_telegram_discover(cfg: Config, params: dict) -> dict:
+    """Liste les conversations où le bot a reçu un message (pour trouver chat_id)."""
+    token = take_secret(cfg, params.get("token_token"))
+    if not token:
+        try:
+            with open(cfg.alerts.telegram_token_file, encoding="utf-8") as fh:
+                token = fh.read().strip()
+        except OSError:
+            token = ""
+    if not token:
+        raise OdooGuardError("jeton du bot absent : le saisir dans le formulaire", "usage")
+    handlers = []
+    if cfg.alerts.https_proxy:
+        handlers.append(urllib.request.ProxyHandler({"https": cfg.alerts.https_proxy}))
+    opener = urllib.request.build_opener(*handlers)
+    url = f"{cfg.alerts.telegram_api.rstrip('/')}/bot{token}/getUpdates"
+    try:
+        with opener.open(url, timeout=20) as resp:
+            data = json.loads(resp.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        raise OdooGuardError(f"Telegram a refusé le jeton (HTTP {exc.code})", "command") from None
+    except urllib.error.URLError as exc:
+        raise OdooGuardError(f"Telegram injoignable depuis OdooGuard : {exc.reason}", "command") from None
+    chats = {}
+    for upd in data.get("result", []):
+        msg = upd.get("message") or upd.get("channel_post") or upd.get("my_chat_member") or {}
+        chat = msg.get("chat") or {}
+        if chat.get("id") is not None:
+            chats[str(chat["id"])] = chat.get("title") or " ".join(
+                x for x in (chat.get("first_name"), chat.get("last_name")) if x) or chat.get("username") or ""
+    if not chats:
+        return {"chats": {}, "message": "aucune conversation trouvée : envoyer d'abord un message au bot "
+                                        "(ou dans le groupe où il a été ajouté), puis relancer"}
+    return {"chats": chats, "message": "conversations trouvées : " + " ; ".join(
+        f"{cid} ({name})" for cid, name in chats.items())}
+
+
+# ------------------------------------------------------------------ comptes du tableau de bord
+def job_user_save(cfg: Config, params: dict, actor: str) -> dict:
+    from odooguard.web import auth
+    name = str(params.get("name", ""))
+    role = params.get("role")
+    if not auth.valid_username(name):
+        raise OdooGuardError("nom invalide (2 à 32 caractères : lettres, chiffres, . _ -)", "usage")
+    if role not in auth.ROLES:
+        raise OdooGuardError("rôle : lecteur, operateur ou admin", "usage")
+    accounts = auth.read_accounts(cfg.web.users_file)
+    new_hash = take_secret(cfg, params.get("hash_token"))
+    if name not in accounts and not new_hash:
+        raise OdooGuardError("mot de passe obligatoire pour un nouveau compte", "usage")
+    if new_hash and not new_hash.startswith("pbkdf2_sha256$"):
+        raise OdooGuardError("empreinte de mot de passe invalide", "usage")
+    if name in accounts and accounts[name]["role"] == "admin" and role != "admin":
+        if sum(1 for a in accounts.values() if a["role"] == "admin") <= 1:
+            raise OdooGuardError("impossible de retirer le rôle admin au dernier administrateur", "usage")
+        if name == actor:
+            raise OdooGuardError("on ne peut pas se retirer soi-même le rôle admin", "usage")
+    created = name not in accounts
+    accounts[name] = {"role": role, "hash": new_hash or accounts[name]["hash"]}
+    auth.write_accounts(cfg.web.users_file, accounts)
+    what = "créé" if created else ("modifié, mot de passe changé" if new_hash else "modifié")
+    return {"name": name, "role": role, "message": f"compte {name} {what} (rôle {role})"}
+
+
+def job_user_delete(cfg: Config, params: dict, actor: str) -> dict:
+    from odooguard.web import auth
+    name = str(params.get("name", ""))
+    accounts = auth.read_accounts(cfg.web.users_file)
+    if name not in accounts:
+        raise OdooGuardError(f"compte inconnu : {name}", "usage")
+    if params.get("confirm") != name:
+        raise OdooGuardError(f"confirmation : retaper exactement « {name} »", "usage")
+    if name == actor:
+        raise OdooGuardError("on ne peut pas supprimer son propre compte", "usage")
+    if accounts[name]["role"] == "admin" and sum(1 for a in accounts.values() if a["role"] == "admin") <= 1:
+        raise OdooGuardError("impossible de supprimer le dernier administrateur", "usage")
+    del accounts[name]
+    auth.write_accounts(cfg.web.users_file, accounts)
+    return {"name": name, "message": f"compte {name} supprimé (sessions ouvertes fermées)"}

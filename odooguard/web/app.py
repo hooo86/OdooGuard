@@ -583,6 +583,186 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
                       {"job": job_id, "ip": client_ip(request)})
         return RedirectResponse(f"/jobs/{job_id}", status_code=303)
 
+    # ------------------------------------------------------------ Réglages (admin)
+    def queue(request, user, role, kind, params, target="") -> RedirectResponse:
+        job_id = history.job_create(user, role, kind, params)
+        safe = {k: v for k, v in params.items() if not k.endswith("_token") and k != "confirm"}
+        history.audit(f"web-{kind}-request", target or kind, "queued",
+                      {"job": job_id, "ip": client_ip(request), **safe})
+        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+    @app.get("/reglages", response_class=HTMLResponse)
+    def reglages(request: Request):
+        user, role, err = require(request, "lecteur")
+        if err:
+            return err
+        return page(request, "reglages.html", user=user)
+
+    # ---- planification
+    @app.get("/planification", response_class=HTMLResponse)
+    def planification(request: Request):
+        user, role, err = require(request, "lecteur")
+        if err:
+            return err
+        from odooguard import schedule
+        return page(request, "planification.html", user=user, timers=schedule.all_timers())
+
+    @app.get("/planification/{timer}", response_class=HTMLResponse)
+    def planification_form(request: Request, timer: str):
+        user, role, err = require(request, "admin")
+        if err:
+            return err
+        from odooguard import schedule
+        if timer not in schedule.TIMERS:
+            return page(request, "error.html", user=user, message="Minuteur inconnu.")
+        t = schedule.current(timer)
+        return page(request, "planification_form.html", user=user, t=t, days=schedule.DAYS,
+                    intervals=list(schedule.INTERVALS), form={"mode": "advanced",
+                                                             "advanced": "\n".join(t["specs"])},
+                    error=None)
+
+    @app.post("/planification/save")
+    async def planification_save(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        from odooguard import schedule
+        timer = form.get("timer", "")
+        if timer not in schedule.TIMERS:
+            return page(request, "error.html", user=user, message="Minuteur inconnu.")
+        try:
+            specs = schedule.validate_specs(schedule.build_specs(form))
+        except OdooGuardError as exc:
+            return page(request, "planification_form.html", user=user, t=schedule.current(timer),
+                        days=schedule.DAYS, intervals=list(schedule.INTERVALS), form=form, error=str(exc))
+        return queue(request, user, role, "schedule",
+                     {"timer": timer, "action": "set", "specs": specs, "enable": form.get("enable") == "on"},
+                     target=timer)
+
+    @app.post("/planification/{timer}/{action}")
+    async def planification_action(request: Request, timer: str, action: str):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        from odooguard import schedule
+        if timer not in schedule.TIMERS or action not in ("enable", "disable", "reset"):
+            return page(request, "error.html", user=user, message="Action inconnue.")
+        return queue(request, user, role, "schedule", {"timer": timer, "action": action}, target=timer)
+
+    # ---- notifications
+    def secret_set(path: str) -> bool:
+        try:
+            return os.path.getsize(path) > 0
+        except OSError:
+            return False
+
+    @app.get("/notifications", response_class=HTMLResponse)
+    def notifications(request: Request):
+        user, role, err = require(request, "admin")
+        if err:
+            return err
+        a = fresh_cfg().alerts
+        return page(request, "notifications.html", user=user, a=a, error=None, form=None,
+                    smtp_pw_set=secret_set(a.smtp_password_file),
+                    tg_token_set=secret_set(a.telegram_token_file))
+
+    @app.post("/notifications/save")
+    async def notifications_save(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        from odooguard import settings
+        params = {k: form.get(k, "") for k in ("min_level", "repeat_hours", "smtp_host", "smtp_port",
+                                               "smtp_security", "smtp_user", "mail_from", "mail_to",
+                                               "telegram_chat_ids", "https_proxy")}
+        for flag in ("use_email", "use_telegram", "send_resolved"):
+            params[flag] = form.get(flag) == "on"
+        a = fresh_cfg().alerts
+        try:
+            settings.validate_notifications(params)
+            if form.get("smtp_password"):
+                params["smtp_password_token"] = settings.stash_secret(cfg, form["smtp_password"])
+            if form.get("telegram_token"):
+                params["telegram_token_token"] = settings.stash_secret(cfg, form["telegram_token"].strip())
+        except OdooGuardError as exc:
+            return page(request, "notifications.html", user=user, a=a, error=str(exc), form=form,
+                        smtp_pw_set=secret_set(a.smtp_password_file),
+                        tg_token_set=secret_set(a.telegram_token_file))
+        return queue(request, user, role, "notify-save", params, target="notifications")
+
+    @app.post("/notifications/test")
+    async def notifications_test(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        return queue(request, user, role, "notify-test", {}, target="notifications")
+
+    @app.post("/notifications/telegram")
+    async def notifications_telegram(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        from odooguard import settings
+        params = {}
+        if form.get("telegram_token"):
+            params["token_token"] = settings.stash_secret(cfg, form["telegram_token"].strip())
+        return queue(request, user, role, "telegram-discover", params, target="telegram")
+
+    # ---- comptes
+    @app.get("/utilisateurs", response_class=HTMLResponse)
+    def utilisateurs(request: Request):
+        user, role, err = require(request, "admin")
+        if err:
+            return err
+        return page(request, "utilisateurs.html", user=user, accounts=auth.read_accounts(cfg.web.users_file),
+                    roles=auth.ROLES, error=None)
+
+    @app.post("/utilisateurs/save")
+    async def utilisateurs_save(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        from odooguard import settings
+        name, new_role = (form.get("name") or "").strip(), form.get("role", "")
+        pw, pw2 = form.get("password") or "", form.get("password2") or ""
+        accounts = auth.read_accounts(cfg.web.users_file)
+        error = None
+        if not auth.valid_username(name):
+            error = "nom invalide (2 à 32 caractères : lettres, chiffres, . _ -)"
+        elif new_role not in auth.ROLES:
+            error = "rôle invalide"
+        elif name not in accounts and not pw:
+            error = "mot de passe obligatoire pour un nouveau compte"
+        elif pw and len(pw) < 12:
+            error = "mot de passe trop court (12 caractères minimum)"
+        elif pw != pw2:
+            error = "les deux saisies du mot de passe diffèrent"
+        if error:
+            return page(request, "utilisateurs.html", user=user, accounts=accounts, roles=auth.ROLES,
+                        error=error)
+        params = {"name": name, "role": new_role}
+        if pw:
+            params["hash_token"] = settings.stash_secret(cfg, auth.hash_password(pw))
+        return queue(request, user, role, "user-save", params, target=f"user:{name}")
+
+    @app.post("/utilisateurs/{name}/delete")
+    async def utilisateurs_delete(request: Request, name: str):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        if (form.get("confirm") or "").strip() != name:
+            return page(request, "error.html", user=user,
+                        message=f"Suppression annulée : il fallait retaper exactement « {name} ».")
+        return queue(request, user, role, "user-delete", {"name": name, "confirm": name},
+                     target=f"user:{name}")
+
     return app
 
 

@@ -18,6 +18,7 @@ install -d -o odooguard -g odooguard -m 750 /var/lib/odooguard/jobs /var/lib/odo
 
 step "1 bis. Gestion des NAS depuis le tableau de bord (programme root à liste blanche)"
 install -m 755 "$SRC/server/odooguard-nas-helper" /usr/local/sbin/odooguard-nas-helper
+install -m 755 "$SRC/server/odooguard-schedule-helper" /usr/local/sbin/odooguard-schedule-helper
 install -d -m 755 /mnt/odooguard
 install -m 440 "$SRC/deploy/sudoers/odooguard" /etc/sudoers.d/odooguard.new
 if visudo -cf /etc/sudoers.d/odooguard.new >/dev/null; then

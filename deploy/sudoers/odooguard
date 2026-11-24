@@ -11,3 +11,6 @@ odooguard ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block odooguard-bac
     /usr/bin/systemctl start --no-block odooguard-backup-db@incr.service, \
     /usr/bin/systemctl start --no-block odooguard-backup-files.service, \
     /usr/bin/systemctl start --no-block odooguard-copy.service
+# Planification des sauvegardes depuis le tableau de bord : programme à liste
+# blanche (minuteurs OdooGuard uniquement, expressions validées par systemd).
+odooguard ALL=(root) NOPASSWD: /usr/local/sbin/odooguard-schedule-helper

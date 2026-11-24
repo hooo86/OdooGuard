@@ -21,8 +21,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import secrets
-import time
 
 from odooguard.config import Config, Destination
 from odooguard.util import OdooGuardError, free_gb, io_probe, run
@@ -35,7 +33,6 @@ USER_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,64}$")
 DOMAIN_RE = re.compile(r"^[A-Za-z0-9_.-]{0,64}$")
 SUBDIR_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 VERSIONS = ("3.1.1", "3.0", "2.1", "2.0")
-SECRET_TTL = 3600
 
 
 # ------------------------------------------------------------------ validation
@@ -70,97 +67,26 @@ def validate(p: dict, *, require_password: bool) -> dict:
             "subdir": subdir, "min_free_gb": min_free, "enabled": bool(p.get("enabled", True))}
 
 
-# ------------------------------------------------------------------ mot de passe à usage unique
-def _secrets_dir(cfg: Config) -> str:
-    d = os.path.join(cfg.state_dir, "pending-secrets")
-    os.makedirs(d, mode=0o700, exist_ok=True)
-    return d
+# ------------------------------------------------------------------ secrets et configuration
+from odooguard import settings as _settings  # noqa: E402
 
 
 def stash_password(cfg: Config, password: str) -> str:
     """Appelé par le service web : dépose le mot de passe, renvoie un jeton."""
-    if len(password) > 256 or "\n" in password or "\x00" in password:
-        raise OdooGuardError("mot de passe invalide (une ligne, 256 caractères au plus)", "usage")
-    token = secrets.token_hex(16)
-    path = os.path.join(_secrets_dir(cfg), token)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(password)
-    return token
+    if len(password) > 256:
+        raise OdooGuardError("mot de passe invalide (256 caractères au plus)", "usage")
+    return _settings.stash_secret(cfg, password)
 
 
 def take_password(cfg: Config, token: str | None) -> str:
     """Appelé par le service de travaux : lit et efface le mot de passe déposé."""
-    purge_stale_secrets(cfg)
-    if not token:
-        return ""
-    if not re.fullmatch(r"[0-9a-f]{32}", token):
-        raise OdooGuardError("jeton de mot de passe invalide", "usage")
-    path = os.path.join(_secrets_dir(cfg), token)
-    try:
-        with open(path, encoding="utf-8") as fh:
-            return fh.read()
-    except FileNotFoundError:
-        raise OdooGuardError("mot de passe expiré : ressaisir le formulaire", "usage") from None
-    finally:
-        try:
-            os.remove(path)
-        except FileNotFoundError:
-            pass
-
-
-def purge_stale_secrets(cfg: Config) -> None:
-    d = _secrets_dir(cfg)
-    for f in os.listdir(d):
-        path = os.path.join(d, f)
-        try:
-            if time.time() - os.stat(path).st_mtime > SECRET_TTL:
-                os.remove(path)
-        except FileNotFoundError:
-            pass
-
-
-# ------------------------------------------------------------------ configuration
-SECTION_RE = re.compile(r"^\s*\[([^\]]+)\]\s*$")
+    return _settings.take_secret(cfg, token)
 
 
 def write_destination(cfg_path: str, name: str, values: dict | None) -> None:
     """Remplace (ou ajoute, ou retire si values=None) la section [destination:<nom>]."""
-    with open(cfg_path, encoding="utf-8") as fh:
-        lines = fh.read().splitlines(keepends=True)
-    header = f"destination:{name}"
-    start = end = None
-    for i, line in enumerate(lines):
-        m = SECTION_RE.match(line)
-        if m and m.group(1).strip() == header:
-            start = i
-        elif m and start is not None and end is None:
-            end = i
-    if start is not None and end is None:
-        end = len(lines)
-    block = []
-    if values is not None:
-        block = [f"[{header}]\n", "# Géré depuis le tableau de bord (page NAS)\n"]
-        block += [f"{k} = {v}\n" for k, v in values.items()]
-        block.append("\n")
-    if start is None:
-        new = lines + (["\n"] if lines and lines[-1].strip() else []) + block
-    else:
-        new = lines[:start] + block + lines[end:]
-    backup = cfg_path + ".avant-nas"
-    st = os.stat(cfg_path)
-    with open(backup, "w", encoding="utf-8") as fh:
-        fh.writelines(lines)
-    os.chmod(backup, 0o600)
-    tmp = cfg_path + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.writelines(new)
-    try:
-        os.chown(tmp, st.st_uid, st.st_gid)
-    except PermissionError:
-        pass
-    os.replace(tmp, cfg_path)
+    _settings.write_section(cfg_path, f"destination:{name}", values,
+                            comment="Géré depuis le tableau de bord (page NAS)")
 
 
 def config_values(v: dict) -> dict:
