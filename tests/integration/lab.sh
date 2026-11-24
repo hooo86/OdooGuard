@@ -303,6 +303,11 @@ for i in $(seq 1 20); do curl -sk -o /dev/null https://127.0.0.1:8443/healthz &&
 v=$(runuser -u odooguard -- sudo -n /usr/local/sbin/odooguard-nas-helper status nas1 2>&1)
 echo "$v" | grep -q '"managed": false' && ok "sudoers : odooguard lance le programme NAS en root" || ko "programme NAS via sudo : $v"
 if runuser -u odooguard -- sudo -n /usr/bin/id >/dev/null 2>&1; then ko "sudoers trop large !"; else ok "sudoers : aucune autre commande root"; fi
+runuser -u odooguard -- sudo -n -l /usr/bin/systemctl start --no-block odooguard-backup-files.service >/dev/null 2>&1 \
+  && ok "sudoers : démarrage d'une sauvegarde autorisé" || ko "sudoers : démarrage de sauvegarde refusé"
+if runuser -u odooguard -- sudo -n -l /usr/bin/systemctl stop odooguard-walreceiver.service >/dev/null 2>&1 \
+   || runuser -u odooguard -- sudo -n -l /usr/bin/systemctl start --no-block ssh.service >/dev/null 2>&1; then
+  ko "sudoers : autres actions systemctl permises !"; else ok "sudoers : aucune autre action systemctl"; fi
 
 step "16. Test de restauration automatique (instant T, VM de test)"
 $OG restore-test --time "$T" >/tmp/lab-restoretest.txt 2>&1 && ok "odooguard restore-test : réussi" || { ko "restore-test"; tail -25 /tmp/lab-restoretest.txt; }

@@ -200,6 +200,20 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
             return redirect
         return page(request, "_progress.html", user=user, progress=progress_list())
 
+    @app.post("/backups/start")
+    async def backups_start(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "operateur", form.get("csrf", ""))
+        if err:
+            return err
+        what = form.get("what", "")
+        if what not in jobs.BACKUP_UNITS:
+            return page(request, "error.html", user=user, message="Sauvegarde inconnue.")
+        job_id = history.job_create(user, role, "backup-start", {"what": what})
+        history.audit("web-backup-request", jobs.BACKUP_UNITS[what][0], "queued",
+                      {"job": job_id, "ip": client_ip(request)})
+        return RedirectResponse(f"/backups?lancee={what}&travail={job_id}", status_code=303)
+
     @app.get("/backups", response_class=HTMLResponse)
     def backups(request: Request):
         user, redirect = login_required(request)
@@ -219,8 +233,12 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
             files = list(reversed(Restic(cfg).snapshots()))[:100]
         except Exception as exc:  # noqa: BLE001
             errors.append(f"restic : {exc}")
+        launched = request.query_params.get("lancee")
+        job_id = request.query_params.get("travail", "")
+        launched_job = history.job_get(int(job_id)) if job_id.isdigit() else None
         return page(request, "backups.html", user=user, db=db, files=files, errors=errors,
-                    window=window, progress=progress_list())
+                    window=window, progress=progress_list(), units=jobs.BACKUP_UNITS,
+                    launched=jobs.BACKUP_UNITS.get(launched, (None, None))[1], launched_job=launched_job)
 
     @app.get("/alerts", response_class=HTMLResponse)
     def alerts(request: Request):

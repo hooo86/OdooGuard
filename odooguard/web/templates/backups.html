@@ -2,6 +2,24 @@
 {% block title %}Sauvegardes{% endblock %}
 {% block content %}
 <h1>Sauvegardes</h1>
+{% if launched %}
+<p class="banner banner-info" role="status">Demande enregistrée : <strong>{{ launched }}</strong>{% if launched_job %} (travail <a href="/jobs/{{ launched_job.id }}">n°{{ launched_job.id }}</a>{% if launched_job.status == 'failed' %} — <strong>en échec</strong> : {{ launched_job.error }}{% endif %}){% endif %}. La progression apparaît ci-dessous dans quelques secondes.</p>
+{% endif %}
+{% if role in ('operateur', 'admin') %}
+<section class="card launch">
+  <h2>Lancer une sauvegarde maintenant</h2>
+  <p class="small muted">Même déroulement que les sauvegardes planifiées (alertes en cas d'échec, journal, progression). Une sauvegarde complète de la base charge server01 pendant 30 à 60 min : de préférence en dehors des heures de bureau.</p>
+  <div class="launch-buttons">
+    {% for key, val in units.items() %}
+    <form method="post" action="/backups/start">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="what" value="{{ key }}">
+      <button type="submit" class="{{ 'primary' if key in ('db-incr', 'files') else '' }}">{{ val[1][:1]|upper }}{{ val[1][1:] }}</button>
+    </form>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
 {% include "_progress.html" %}
 <h2>Sauvegardes disponibles</h2>
 {% for e in errors %}<p class="banner banner-critical" role="alert">{{ e }}</p>{% endfor %}

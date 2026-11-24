@@ -125,3 +125,9 @@ progress::-webkit-progress-value { background: var(--series-1); border-radius: 6
 progress::-moz-progress-bar { background: var(--series-1); border-radius: 6px; }
 .progress-figures { display: flex; flex-wrap: wrap; gap: 6px 22px; align-items: baseline; font-variant-numeric: tabular-nums; }
 .kpi-small { font-size: 20px; font-weight: 650; }
+/* Lancement manuel des sauvegardes */
+.launch { margin: 0 0 16px; display: grid; gap: 8px; }
+.launch h2 { margin: 0; }
+.launch-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.launch-buttons form { margin: 0; }
+.banner-info { background: var(--surface-1); border-left: 4px solid var(--series-1); }

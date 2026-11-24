@@ -31,6 +31,33 @@ from odooguard.util import OdooGuardError, file_lock
 log = logging.getLogger("odooguard")
 
 ROLES = ("lecteur", "operateur", "admin")
+
+# Sauvegardes lançables depuis le tableau de bord -> service systemd (le même que
+# celui des planifications : mêmes verrous, alertes OnFailure, journaux, progression).
+BACKUP_UNITS = {
+    "db-full": ("odooguard-backup-db@full.service", "base : sauvegarde complète"),
+    "db-diff": ("odooguard-backup-db@diff.service", "base : sauvegarde différentielle"),
+    "db-incr": ("odooguard-backup-db@incr.service", "base : sauvegarde incrémentale"),
+    "files": ("odooguard-backup-files.service", "fichiers (filestore, modules, configuration)"),
+    "copy": ("odooguard-copy.service", "copie vers les NAS"),
+}
+
+
+def start_backup(what: str) -> dict:
+    """Démarre le service de sauvegarde demandé (sans attendre sa fin)."""
+    if what not in BACKUP_UNITS:
+        raise OdooGuardError(f"sauvegarde inconnue : {what}", "usage")
+    unit, label = BACKUP_UNITS[what]
+    from odooguard.util import run
+    state = run(["systemctl", "is-active", unit], check=False).stdout.strip()
+    if state in ("active", "activating"):
+        raise OdooGuardError(f"{label} : déjà en cours", "usage")
+    res = run(["sudo", "-n", "/usr/bin/systemctl", "start", "--no-block", unit], check=False)
+    if res.returncode != 0:
+        raise OdooGuardError(f"démarrage de {unit} impossible : {(res.stderr or res.stdout).strip()[-300:]}",
+                             "command")
+    return {"unit": unit, "message": f"{label} lancée (service {unit}) : suivre la progression "
+                                     "dans « Sauvegardes »"}
 ROLE_RANK = {r: i for i, r in enumerate(ROLES)}
 
 
@@ -121,6 +148,12 @@ def run_job(cfg: Config, history: History, job: dict) -> None:
                     raise
                 history.finish(run_id, "success", message=f"{v['db']} -> {v['as_name']} ({v['target']})",
                                details=result)
+        elif job["kind"] == "backup-start":
+            if not can(job["role"], "operateur"):
+                raise OdooGuardError("droits insuffisants (rôle opérateur requis)", "usage")
+            result = start_backup(str(params.get("what", "")))
+            log.info("%s", result["message"])
+            auditor.record("backup-start", result["unit"], "success")
         elif job["kind"] in ("nas-apply", "nas-test", "nas-remove"):
             from odooguard import config as config_mod
             from odooguard import nas
