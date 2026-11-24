@@ -33,6 +33,8 @@
 # =============================================================================
 set -euo pipefail
 umask 027
+# Répertoire neutre : runuser -u postgres ne peut pas lire /root (avertissement psql)
+cd /
 
 CONF=/etc/odooguard-agent.conf
 ODOO_USER=odoo
