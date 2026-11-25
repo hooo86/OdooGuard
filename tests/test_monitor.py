@@ -469,3 +469,13 @@ def test_testvm_page(web):
     r = ada.post("/vm-test/save", data={"csrf": tok, **TESTVM}, follow_redirects=False)
     assert r.status_code == 303 and hist.jobs_recent(1)[0]["kind"] == "testvm-save"
     assert "Tester la connexion" not in client("lea").get("/vm-test").text
+
+
+def test_age_message_consistent_with_level():
+    from odooguard.status import _age_message, _level_for_age
+    for age, lvl in ((600, "ok"), (3000, "warning"), (12600, "critical")):
+        assert _level_for_age(age, 3600) == lvl
+        msg = _age_message("sauvegarde des fichiers", age, 3600)
+        assert (msg == "ok") == (lvl == "ok")
+    assert _age_message("sauvegarde des fichiers", 12600, 3600) == \
+        "EN RETARD : dernière sauvegarde des fichiers il y a 3 h 30 (seuil 60 min)"
