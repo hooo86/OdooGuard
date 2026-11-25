@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import pwd
+import re
 import signal
 import sys
 import threading
@@ -44,6 +45,35 @@ class Ctx:
         notify.configure(self.cfg, self.history)
 
 
+_KIND_FR = {"full": "complète", "diff": "différentielle", "incr": "incrémentale"}
+_STATS = re.compile(r"^(Number of|Total |Literal data|Matched data|File list|sent \d|total size|"
+                    r"Total bytes)", re.I)
+
+
+def what_fr(component: str, kind: str) -> str:
+    if component == "db":
+        return f"sauvegarde {_KIND_FR.get(kind, kind)} de la base"
+    if component == "files":
+        return "sauvegarde des fichiers (filestore, modules, configuration)"
+    if component.startswith("copy:"):
+        return f"copie vers {component[5:]}"
+    return {"verify": "vérification des dépôts", "maintenance": "maintenance hebdomadaire",
+            "restore": "restauration", "restore-test": "test de restauration"}.get(component, f"{component} ({kind})")
+
+
+def failure_body(exc: Exception, category: str, max_lines: int = 12) -> str:
+    """Message d'échec lisible : sans statistiques rsync ni lignes vides, tronqué."""
+    lines = []
+    # « rsync -a --numeric-ids ... -e 'ssh ...' source dest » : seul le nom de la commande sert
+    text = re.sub(r"«\s*(\S+)[^»]{60,}»", r"« \1 … »", str(exc))
+    for line in text.replace(" : rsync:", " :\nrsync:").splitlines():
+        line = line.strip()
+        if line and not _STATS.match(line):
+            lines.append(line[:400])
+    text = "\n".join(lines[:max_lines]) or str(exc)[:600]
+    return f"{text}\n\nCatégorie : {category}. Détail : tableau de bord, page Historique."
+
+
 def tracked(ctx: Ctx, component: str, kind: str, func, *, alert: bool = True):
     """Exécute ``func`` en traçant début/fin dans l'historique.
 
@@ -66,7 +96,7 @@ def tracked(ctx: Ctx, component: str, kind: str, func, *, alert: bool = True):
         ctx.history.finish(run_id, "failed", message=str(exc), category=cat, size=partial.get("size"),
                            added=partial.get("added"), label=partial.get("label"))
         if alert:
-            notify.send("critical", f"OdooGuard : échec {component} ({kind}) [{cat}]", str(exc)[:1500],
+            notify.send("critical", f"échec : {what_fr(component, kind)}", failure_body(exc, cat),
                         category=notify.category_of(component) if component.startswith("copy:") else "echec")
         raise
     ctx.history.finish(run_id, "success", size=result.get("size"), added=result.get("added"),
@@ -211,7 +241,8 @@ def cmd_wal_ingest(ctx: Ctx) -> int:
 
     def on_error(exc):
         if time.time() - last_alert[0] > 900:  # au plus une alerte / 15 min
-            notify.send("critical", "OdooGuard : versement des WAL en échec", str(exc)[:1500])
+            notify.send("critical", "échec du versement des WAL dans le dépôt",
+                        failure_body(exc, getattr(exc, "category", "error")))
             last_alert[0] = time.time()
     ing.loop(on_error=on_error)
     return 0
@@ -387,11 +418,39 @@ def cmd_maintenance(ctx: Ctx) -> int:
     return 0
 
 
+# Lignes de journal sans intérêt pour un humain (sudo, PAM, audit JSON, cycle de vie systemd)
+_NOISE = re.compile(r"pam_unix\(|COMMAND=|^\{\"ts\"|^(Started|Starting|Stopping|Stopped) |"
+                    r"Triggering OnFailure|Consumed .* CPU time|Main process exited|Failed with result|"
+                    r"Deactivated successfully|Scheduled restart job")
+_STAMP = re.compile(r"^\d{4}-\d\d-\d\d (\d\d:\d\d:\d\d),\d+ (INFO|WARNING|ERROR|DEBUG) ")
+
+
+def summarize_unit_journal(text: str, max_lines: int = 8) -> tuple[str, list[str]]:
+    """(cause probable, dernières lignes utiles) à partir du journal brut d'une unité."""
+    useful = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or _NOISE.search(line):
+            continue
+        line = _STAMP.sub(lambda m: f"{m.group(1)} {'' if m.group(2) == 'INFO' else m.group(2) + ' '}", line)
+        useful.append(line[:300])
+    errors = [l for l in useful if re.search(r"ERREUR|ERROR|échec|Traceback|Error|refus|impossible", l)]
+    cause = errors[-1] if errors else (useful[-1] if useful else "aucune ligne explicite dans le journal")
+    return cause, useful[-max_lines:]
+
+
 def cmd_notify_failure(ctx: Ctx) -> int:
-    """Appelé par OnFailure= des unités systemd : alerte avec la fin du journal."""
+    """Appelé par OnFailure= des unités systemd : alerte courte avec la cause probable."""
     unit = ctx.args.unit
-    res = run(["journalctl", "-u", unit, "-n", "25", "--no-pager", "-o", "cat"], check=False)
-    notify.send("critical", f"OdooGuard : l'unité {unit} a échoué", res.stdout[-3000:], category="unite")
+    res = run(["journalctl", "-u", unit, "-n", "60", "--no-pager", "-o", "cat"], check=False)
+    desc = run(["systemctl", "show", unit, "-p", "Description", "--value"], check=False).stdout.strip()
+    cause, lines = summarize_unit_journal(res.stdout)
+    name = unit.removesuffix(".service")
+    body = (f"{desc or name} s'est arrêté en erreur.\n\n"
+            f"Cause probable :\n  {cause}\n\n"
+            "Dernières lignes utiles :\n" + "\n".join(f"  {l}" for l in lines) +
+            f"\n\nJournal complet sur OdooGuard : journalctl -u {unit} -n 200")
+    notify.send("critical", f"échec du service {name}", body, category="unite")
     return 0
 
 
@@ -639,7 +698,11 @@ def _drop_privileges_if_root(run_as: str) -> None:
                           *sys.argv[1:]])
 
 
+_STOPPED_BY_SYSTEMD = [False]
+
+
 def _sigterm(_signum, _frame):
+    _STOPPED_BY_SYSTEMD[0] = True
     raise KeyboardInterrupt
 
 
@@ -663,5 +726,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERREUR [{exc.category}] : {exc}", file=sys.stderr)
         return 3 if exc.category == "usage" else 2
     except KeyboardInterrupt:
+        if _STOPPED_BY_SYSTEMD[0]:
+            # Arrêt demandé (systemctl stop/restart, mise à jour, extinction) : ce n'est pas
+            # une panne. L'exécution est notée « interrompue » dans l'historique ; code 0 pour
+            # que systemd ne déclenche pas l'alerte « l'unité a échoué ».
+            print("arrêt demandé : interrompu proprement", file=sys.stderr)
+            return 0
         print("interrompu", file=sys.stderr)
         return 130

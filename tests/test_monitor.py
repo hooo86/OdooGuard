@@ -549,3 +549,54 @@ def test_externals_toggle(cfg, web):
     tok = re.search(r'name="csrf" value="([^"]+)"', html).group(1)
     r = ada.post("/surveillance/externes", data={"csrf": tok, "ext": ["veeam"]}, follow_redirects=False)
     assert r.status_code == 303 and json.loads(hist.jobs_recent(1)[0]["params"]) == {"enabled": ["veeam"]}
+
+
+JOURNAL = """odooguard : PWD=/ ; USER=root ; COMMAND=/usr/local/sbin/odooguard-schedule-helper set odooguard-copy.timer '*-*-* *:15:00'
+pam_unix(sudo:session): session opened for user root(uid=0) by (uid=999)
+pam_unix(sudo:session): session closed for user root
+2026-11-25 14:41:42,559 INFO Copie vers les NAS : planification enregistrée (*-*-* *:15:00)
+{"ts": "2026-11-25T14:41:42+0100", "actor": "web:admin", "action": "set"}
+2026-11-25 14:43:21,722 INFO NAS nas2 retiré (les sauvegardes déjà présentes sur le NAS sont conservées)
+2026-11-25 14:50:01,100 ERROR échec : rsync en erreur (23)
+Stopping odooguard-jobs.service - OdooGuard - exécution des travaux de l'assistant web...
+odooguard-jobs.service: Main process exited, code=exited, status=2/n/a
+odooguard-jobs.service: Failed with result 'exit-code'.
+odooguard-jobs.service: Triggering OnFailure= dependencies.
+odooguard-jobs.service: Consumed 3.163s CPU time, 54.8M memory peak, 0B memory swap peak.
+"""
+
+
+def test_summarize_unit_journal():
+    from odooguard.cli import summarize_unit_journal
+    cause, lines = summarize_unit_journal(JOURNAL)
+    assert cause == "14:50:01 ERROR échec : rsync en erreur (23)"
+    assert lines == ["14:41:42 Copie vers les NAS : planification enregistrée (*-*-* *:15:00)",
+                     "14:43:21 NAS nas2 retiré (les sauvegardes déjà présentes sur le NAS sont conservées)",
+                     "14:50:01 ERROR échec : rsync en erreur (23)"]
+
+
+def test_sigterm_exits_cleanly(monkeypatch):
+    import signal
+    from odooguard import cli
+    def boom(ctx):
+        cli._sigterm(signal.SIGTERM, None)
+    monkeypatch.setattr(cli, "Ctx", lambda args: None)
+    parser = cli.build_parser()
+    args = parser.parse_args(["status"])
+    args.func = boom
+    monkeypatch.setattr(cli, "build_parser", lambda: type("P", (), {"parse_args": lambda self, a: args})())
+    cli._STOPPED_BY_SYSTEMD[0] = False
+    assert cli.main([]) == 0
+    cli._STOPPED_BY_SYSTEMD[0] = False
+
+
+def test_failure_mail_is_short():
+    from odooguard.cli import failure_body, what_fr
+    from odooguard.util import CommandError
+    exc = CommandError(["rsync", "-a"], 23, "rsync: [Receiver] write error: Broken pipe (32)\n\nNumber of files: 0\n"
+                       "Number of created files: 0\nTotal file size: 0 bytes\nLiteral data: 0 bytes\n"
+                       "sent 52 bytes  received 10 bytes  124.00 bytes/sec\ntotal size is 0  speedup is 0.00")
+    body = failure_body(exc, "command")
+    assert "Broken pipe" in body and "Number of" not in body and "speedup" not in body
+    assert what_fr("db", "incr") == "sauvegarde incrémentale de la base"
+    assert what_fr("copy:nas1", "copy") == "copie vers nas1"
