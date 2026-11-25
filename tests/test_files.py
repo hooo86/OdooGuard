@@ -73,3 +73,27 @@ def test_pull_mirror_continues_after_missing_source(cfg, monkeypatch):
     failed = files.failed_sources(stats)
     assert list(failed) == ["/opt/odoo/custom-addons"] and "addons_path" in failed["/opt/odoo/custom-addons"]
     assert stats["/etc/odoo"]["total file size"] == 1024
+
+
+def test_snapshot_figures_from_history(cfg):
+    from odooguard import files
+    from odooguard.history import History
+    h = History(cfg.history_db)
+    rid = h.start("files", "snapshot")
+    h.finish(rid, "success", size=60 * 1024**3, added=12 * 1024**2, label="da7ac69a")
+    rid = h.start("files", "snapshot")
+    h.finish(rid, "failed", size=59 * 1024**3, added=58 * 1024**3, label="4e7f6bff", message="partiel")
+    snaps = [{"short_id": "da7ac69a", "time": "2026-11-25T10:14:10.123456789+01:00"},
+             {"short_id": "4e7f6bff", "time": "2026-11-25T08:48:34.5Z"},
+             {"short_id": "ffffffff", "time": "?", "summary": {"total_bytes_processed": 5, "data_added": 0}}]
+    out = files.snapshot_figures(h, snaps)
+    assert out[0]["size"] == 60 * 1024**3 and out[0]["added"] == 12 * 1024**2
+    assert out[0]["ts"] == 1795598050.0  # 10:14:10+01:00 = 09:14:10 UTC
+    assert out[1]["added"] == 58 * 1024**3 and out[1]["ts"] == 1795596514.0
+    assert out[2]["size"] == 5 and out[2]["added"] == 0 and out[2]["ts"] is None
+
+
+def test_restic_time():
+    from odooguard.files import restic_time
+    assert restic_time("2026-11-25T08:48:34.123456789Z") == restic_time("2026-11-25T09:48:34+01:00")
+    assert restic_time("n'importe quoi") is None

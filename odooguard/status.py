@@ -84,14 +84,16 @@ def compute(cfg: Config, history: History, *, query_source: bool = True) -> dict
         snaps = Restic(cfg).snapshots()
         if snaps:
             s = snaps[-1]
-            t = dt.datetime.fromisoformat(s["time"].replace("Z", "+00:00")).timestamp()
+            from odooguard.files import restic_time
+            t = restic_time(s["time"]) or dt.datetime.fromisoformat(s["time"].replace("Z", "+00:00")).timestamp()
             files_age = now - t
             summary = s.get("summary") or {}
             run_row = history.last("files", status="success")
+            by_label = run_row if run_row and run_row.get("label") == s["short_id"][:8] else None
             comps.append(_component(
                 "files", _level_for_age(files_age, cfg.max_age["files"]), age=files_age,
-                last_label=s["short_id"], size=summary.get("total_bytes_processed"),
-                added=summary.get("data_added"),
+                last_label=s["short_id"], size=summary.get("total_bytes_processed") or (by_label or {}).get("size_bytes"),
+                added=summary.get("data_added") if summary.get("data_added") is not None else (by_label or {}).get("added_bytes"),
                 duration=(run_row["ended_at"] - run_row["started_at"]) if run_row else None,
                 snapshots=len(snaps), message="ok"))
         else:

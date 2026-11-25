@@ -243,7 +243,8 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
             errors.append(f"pgBackRest : {exc}")
             window = (None, None)
         try:
-            files = list(reversed(Restic(cfg).snapshots()))[:100]
+            from odooguard.files import snapshot_figures
+            files = snapshot_figures(history, list(reversed(Restic(cfg).snapshots()))[:100])
         except Exception as exc:  # noqa: BLE001
             errors.append(f"restic : {exc}")
         launched = request.query_params.get("lancee")

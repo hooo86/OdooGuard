@@ -62,7 +62,9 @@ def tracked(ctx: Ctx, component: str, kind: str, func, *, alert: bool = True):
         raise
     except Exception as exc:  # noqa: BLE001 - on veut tout tracer
         cat = getattr(exc, "category", "error")
-        ctx.history.finish(run_id, "failed", message=str(exc), category=cat)
+        partial = getattr(exc, "result", None) or {}  # échec partiel : ce qui a été fait malgré tout
+        ctx.history.finish(run_id, "failed", message=str(exc), category=cat, size=partial.get("size"),
+                           added=partial.get("added"), label=partial.get("label"))
         if alert:
             notify.send("critical", f"OdooGuard : échec {component} ({kind}) [{cat}]", str(exc)[:1500])
         raise
@@ -138,9 +140,12 @@ def cmd_backup(ctx: Ctx) -> int:
             failed = failed_sources(stats)
             if failed:
                 ok = [s for s in stats if s not in failed]
-                raise OdooGuardError(
+                err = OdooGuardError(
                     f"instantané {summ['snapshot_id'][:8]} créé pour {', '.join(ok) or 'aucune source'} ; "
                     "EN ÉCHEC : " + " ; ".join(f"{s} ({e})" for s, e in failed.items()), "source")
+                err.result = {"label": summ["snapshot_id"][:8], "size": summ.get("total_bytes_processed"),
+                              "added": summ.get("data_added")}
+                raise err
             return {"label": summ["snapshot_id"][:8], "size": summ.get("total_bytes_processed"),
                     "added": summ.get("data_added"), "rsync": stats}
         with file_lock(cfg.lock_dir, "files", wait=a.wait):

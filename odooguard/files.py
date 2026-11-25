@@ -206,3 +206,32 @@ def _rsync_stats(out: str) -> dict:
                    "total file size", "total transferred file size") and num.isdigit():
             stats[key] = int(num)
     return stats
+
+
+def restic_time(text: str) -> float | None:
+    """« 2026-11-25T10:14:10.123456789+01:00 » (ou Z) -> epoch ; nanosecondes ignorées."""
+    import re
+    m = re.match(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d+)?(Z|[+-]\d\d:\d\d)?$", text or "")
+    if not m:
+        return None
+    tz = m.group(2) or "+00:00"
+    return dt.datetime.fromisoformat(m.group(1) + ("+00:00" if tz == "Z" else tz)).timestamp()
+
+
+def snapshot_figures(history, snaps: list[dict]) -> list[dict]:
+    """Complète les instantanés restic : heure (epoch), taille traitée, volume ajouté.
+
+    restic < 0.17 n'enregistre pas de résumé dans l'instantané : les chiffres viennent
+    alors de l'historique d'OdooGuard (exécution « files » dont l'étiquette = short_id).
+    """
+    runs = {r["label"]: r for r in history.recent(2000, component="files") if r.get("label")}
+    out = []
+    for s in snaps:
+        s = dict(s)
+        s["ts"] = restic_time(s.get("time", ""))
+        summ = s.get("summary") or {}
+        run = runs.get(s.get("short_id", "")[:8])
+        s["size"] = summ.get("total_bytes_processed") or (run or {}).get("size_bytes")
+        s["added"] = summ.get("data_added") if summ.get("data_added") is not None else (run or {}).get("added_bytes")
+        out.append(s)
+    return out

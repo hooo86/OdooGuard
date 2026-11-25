@@ -44,9 +44,9 @@
   <thead><tr><th>Instantané</th><th>Date</th><th>Taille traitée</th><th>Ajouté</th></tr></thead>
   <tbody>
   {% for s in files %}
-    <tr><td><code>{{ s.short_id }}</code></td><td>{{ s.time[:19].replace('T', ' ') }} UTC</td>
-      <td class="num">{{ fmt_size((s.summary or {}).get('total_bytes_processed')) }}</td>
-      <td class="num">{{ fmt_size((s.summary or {}).get('data_added')) }}</td></tr>
+    <tr><td><code>{{ s.short_id }}</code></td><td class="nowrap">{{ fmt_time(s.ts) if s.ts else s.time[:19].replace('T', ' ') }}</td>
+      <td class="num">{{ fmt_size(s.size) if s.size is not none else '—' }}</td>
+      <td class="num">{{ fmt_size(s.added) if s.added is not none else '—' }}</td></tr>
   {% else %}<tr><td colspan="4" class="muted">Aucun instantané.</td></tr>{% endfor %}
   </tbody>
 </table></div>
