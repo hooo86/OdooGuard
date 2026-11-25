@@ -172,6 +172,24 @@ Un état absent ou périmé renvoie toujours « inconnu » (3), jamais « OK ».
 OdooGuard ou son contrôle s'arrête, Zabbix alerte de son côté, indépendamment des alertes
 d'OdooGuard.
 
+### Certificat du tableau de bord (« Non sécurisé »)
+
+Le certificat doit contenir **exactement** le nom tapé dans le navigateur. Le recréer
+avec ce nom :
+
+```bash
+cd /root/odooguard-src && sudo OG_NAMES="odooguard.lnhc.dz" OG_IP=192.168.8.81 ./install/web-cert.sh
+```
+
+Puis l'installer sur chaque poste Windows dans les **autorités de certification racines
+de confiance** de l'ordinateur (PowerShell administrateur), et redémarrer le navigateur :
+
+```powershell
+Import-Certificate -FilePath .\odooguard.crt -CertStoreLocation Cert:\LocalMachine\Root
+```
+
+L'empreinte change : mettre à jour `-CertThumbprint` des tâches planifiées Windows (Veeam).
+
 ## 4. Veeam et copie hors ligne G:\ (Windows)
 
 Sur chaque machine Windows concernée, créer `C:\OdooGuard\` et y copier

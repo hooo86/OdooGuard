@@ -63,12 +63,8 @@ fi
 
 step "4. Certificat HTTPS auto-signé (10 ans)"
 if [[ ! -f "$ETC/web/odooguard.crt" ]]; then
-    openssl req -x509 -newkey rsa:3072 -sha256 -days 3650 -nodes \
-        -keyout "$ETC/web/odooguard.key" -out "$ETC/web/odooguard.crt" \
-        -subj "/CN=$(hostname -f)/O=LNHC OdooGuard" \
-        -addext "subjectAltName=DNS:$(hostname -f),DNS:$(hostname -s),IP:$OG_IP" 2>/dev/null
-    chown odooguard:odooguard "$ETC/web/odooguard.key" "$ETC/web/odooguard.crt"
-    chmod 600 "$ETC/web/odooguard.key"; chmod 644 "$ETC/web/odooguard.crt"
+    # Noms couverts : OG_NAMES (nom tapé dans le navigateur), nom de la machine, adresse IP
+    OG_IP="$OG_IP" OG_NAMES="${OG_NAMES:-odooguard.lnhc.dz}" "$SRC/install/web-cert.sh"
 fi
 THUMB=$(openssl x509 -in "$ETC/web/odooguard.crt" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d :)
 
