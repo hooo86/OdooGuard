@@ -28,7 +28,7 @@
 <p>Restauration à un instant précis possible
   {% if window[0] %}du <strong>{{ fmt_time(window[0]) }}</strong> jusqu'au dernier WAL reçu ({{ window[1] }}){% else %}: aucune sauvegarde{% endif %}.
   Commande : <code>odooguard restore db --db LNHC_Prod_2025 --as COPIE --time "AAAA-MM-JJ HH:MM" --target testvm</code></p>
-<h2>Base de données (pgBackRest)</h2>
+<h2 id="base">Base de données (pgBackRest)</h2>
 <div class="table-wrap"><table>
   <thead><tr><th>Étiquette</th><th>Type</th><th>Début</th><th>Fin</th><th class="num">Durée</th><th class="num">Taille base</th><th class="num">Taille dépôt</th><th class="num">Ajouté</th></tr></thead>
   <tbody>
@@ -39,7 +39,7 @@
   {% else %}<tr><td colspan="8" class="muted">Aucune sauvegarde.</td></tr>{% endfor %}
   </tbody>
 </table></div>
-<h2>Fichiers (restic, 100 derniers instantanés)</h2>
+<h2 id="fichiers">Fichiers (restic, 100 derniers instantanés)</h2>
 <div class="table-wrap"><table>
   <thead><tr><th>Instantané</th><th>Date</th><th class="num">Taille traitée</th><th class="num">Ajouté</th></tr></thead>
   <tbody>

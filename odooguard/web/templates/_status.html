@@ -7,33 +7,33 @@
   </p>
   {% endif %}
   <section class="hero" aria-label="Indicateurs clés">
-    <article class="metric">
+    <a class="metric metric-link" href="#composants" title="Détail par composant">
       <header><span class="label">État global</span>{{ icon('shield') }}</header>
       <div class="hero-value">{{ badge(st.overall) }}</div>
       <span class="small muted">calculé le {{ fmt_time(st.generated_at) }}</span>
-    </article>
-    <article class="metric">
+    </a>
+    <a class="metric metric-link" href="/backups#base" title="Sauvegardes de la base">
       <header><span class="label">Perte de données max. — base</span>{{ icon('database') }}</header>
       <div class="kpi">{{ fmt_age(st.rpo.get('db_seconds')) }}</div>
       <span class="small muted">objectif ≤ 1 h · flux WAL continu</span>
-    </article>
-    <article class="metric">
+    </a>
+    <a class="metric metric-link" href="/backups#fichiers" title="Instantanés des fichiers">
       <header><span class="label">Perte de données max. — fichiers</span><span class="accent">{{ icon('folder') }}</span></header>
       <div class="kpi">{{ fmt_age(st.rpo.get('files_seconds')) }}</div>
       <span class="small muted">objectif ≤ 1 h · filestore, modules</span>
-    </article>
-    <article class="metric">
+    </a>
+    <a class="metric metric-link" href="/alerts" title="Alertes en cours">
       <header><span class="label">Alertes actives</span>{{ icon('notifications_active') }}</header>
       <div class="kpi">{{ active|length }}</div>
-      <span class="small"><a href="/alerts">voir le détail</a></span>
-    </article>
+      <span class="small link-text">voir le détail</span>
+    </a>
   </section>
 
   {% set mon = st.monitor or {} %}
   {% if mon %}
   <section class="widgets" aria-label="Stockage et services">
     <article class="card widget">
-      <header class="widget-head"><h2>{{ icon('storage') }}Stockage</h2>
+      <header class="widget-head"><h2><a href="/surveillance" title="Seuils d'alerte">{{ icon('storage') }}Stockage</a></h2>
         <span class="small muted">seuils {{ (mon.thresholds or {}).warn }} % / {{ (mon.thresholds or {}).crit }} %</span></header>
       {% for host, hlabel in (('odooguard', 'OdooGuard'), ('odoo', 'Serveur Odoo'), ('nas', 'NAS')) %}
       {% set disks = mon.storage|selectattr('host', 'equalto', host)|list %}
@@ -53,7 +53,7 @@
       {% endfor %}
     </article>
     <article class="card widget">
-      <header class="widget-head"><h2>{{ icon('monitor_heart') }}Services</h2>
+      <header class="widget-head"><h2><a href="/surveillance" title="Services surveillés">{{ icon('monitor_heart') }}Services</a></h2>
         <span class="small muted">relevé {{ fmt_time(mon.collected_at) }}</span></header>
       {% if mon.remote_error %}<p class="banner banner-critical small" role="alert">Serveur Odoo : {{ mon.remote_error }}</p>{% endif %}
       {% for host, hlabel in (('odoo', 'Serveur Odoo'), ('odooguard', 'OdooGuard')) %}
@@ -79,7 +79,7 @@
   </section>
   {% endif %}
 
-  <div class="table-wrap"><table class="components">
+  <div class="table-wrap" id="composants"><table class="components">
     <caption>Dernière sauvegarde réussie par composant</caption>
     <thead><tr><th>Composant</th><th>État</th><th class="num">Âge</th><th class="num">Taille</th><th class="num">Ajouté</th><th class="num">Durée</th><th>Détail</th></tr></thead>
     <tbody>
