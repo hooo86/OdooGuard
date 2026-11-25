@@ -205,9 +205,13 @@ SQL
     [[ "$logfile" =~ ^(False|false|None)?$ ]] && logfile=""
     pgdata="/var/lib/postgresql"
     MONITOR_SERVICES="${MONITOR_SERVICES:-}"
-    python3 - "$cursor" "$logfile" "$ODOO_SERVICE" "$FILESTORE" "$pgdata" "$MONITOR_SERVICES" "$users_json" <<'PY'
+    # Liste des comptes par fichier : elle dépasse vite la taille maximale d'un argument (128 Kio)
+    users_file=$(mktemp /tmp/odooguard-monitor.XXXXXX)
+    trap 'rm -f "$users_file"' EXIT
+    printf '%s' "$users_json" > "$users_file"
+    python3 - "$cursor" "$logfile" "$ODOO_SERVICE" "$FILESTORE" "$pgdata" "$MONITOR_SERVICES" "$users_file" <<'PY'
 import datetime as dt, json, os, re, subprocess, sys
-cursor, logfile, odoo_service, filestore, pgdata, extra_services, users_json = sys.argv[1:8]
+cursor, logfile, odoo_service, filestore, pgdata, extra_services, users_file = sys.argv[1:8]
 out = {"version": 1}
 
 # ---- disques : systèmes de fichiers des chemins importants (sans doublon)
@@ -328,7 +332,11 @@ else:
 auth["events"] = events
 auth["truncated"] = len(events) >= MAXEV
 out["auth"] = auth
-out["users"] = json.loads(users_json)
+if os.path.isfile(users_file):
+    with open(users_file, encoding="utf-8") as fh:
+        out["users"] = json.load(fh)
+else:  # appel direct du script (tests) : JSON en argument
+    out["users"] = json.loads(users_file)
 print(json.dumps(out))
 PY
     ;;

@@ -53,6 +53,14 @@ def test_agent_monitor_reads_odoo_log_and_rotation(tmp_path):
     os.rename(log, str(log) + ".1")
     log.write_text("2026-11-25 07:06:00,1 1 INFO P x: Login failed for db:P login:eve from 1.2.3.4\n")
     assert [e["login"] for e in run(cur)["auth"]["events"]] == ["bob", "eve"]
+    # Comptes passés par fichier (des milliers de comptes dépassent la limite d'un argument)
+    big = {"P": [{"id": i, "login": f"user{i}@exemple.dz", "name": "x" * 40} for i in range(5000)]}
+    f = tmp_path / "users.json"
+    f.write_text(json.dumps(big))
+    r = subprocess.run([sys.executable, "-I", str(script), "-", str(log), "odoo-inexistant", str(tmp_path),
+                        str(tmp_path), "", str(f)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert len(json.loads(r.stdout)["users"]["P"]) == 5000
 
 
 def test_agent_monitor_verb_validates_cursor():
