@@ -676,3 +676,36 @@ def test_copy_holds_db_lock_only_for_final_pass(cfg, monkeypatch):
     assert ("pg", False, False) in events          # passe principale sans verrou
     assert ("pg", True, True) in events            # passe finale vérifiée sous le verrou db
     assert ("restic", True) in events and ("man", set()) in events
+
+
+def test_copy_pgbackrest_ignores_nas_dates(cfg, tmp_path, monkeypatch):
+    """NAS qui ne garde pas les dates : rien n'est renvoyé, mais les index modifiés le sont."""
+    import shutil
+    from odooguard import dest as dest_mod
+    from odooguard.config import Destination
+    repo = tmp_path / "repo"
+    (repo / "backup/lnhc/F1").mkdir(parents=True)
+    (repo / "archive/lnhc").mkdir(parents=True)
+    (repo / "backup/lnhc/F1/data.zst").write_bytes(b"x" * 5000)
+    (repo / "backup/lnhc/backup.info").write_text("AAAA")
+    (repo / "archive/lnhc/archive.info").write_text("v1")
+    cfg.repo_path = str(repo)
+    d = Destination(name="nas1", path=str(tmp_path / "nas"))
+    calls = []
+    real_run, real_stream = dest_mod.run, dest_mod.run_streaming
+    monkeypatch.setattr(dest_mod, "run", lambda cmd, **k: calls.append(cmd) or real_run(cmd, **k))
+    dest_mod.copy_pgbackrest(cfg, d, verify=False)
+    target = tmp_path / "nas/pgbackrest"
+    assert (target / "backup/lnhc/F1/data.zst").stat().st_size == 5000
+    assert (target / "backup/lnhc/backup.info").read_text() == "AAAA"
+    # Le NAS « change » toutes les dates ; un index est réécrit à taille égale
+    for f in target.rglob("*"):
+        if f.is_file():
+            os.utime(f, (1, 1))
+    (repo / "backup/lnhc/backup.info").write_text("BBBB")
+    out = []
+    monkeypatch.setattr(dest_mod, "run_streaming",
+                        lambda cmd, cb, **k: out.append(real_stream(cmd, cb, **k)) or out[-1])
+    dest_mod.copy_pgbackrest(cfg, d, verify=False)
+    assert "Number of regular files transferred: 0" in out[-1].stdout   # données non renvoyées
+    assert (target / "backup/lnhc/backup.info").read_text() == "BBBB"   # index recopié

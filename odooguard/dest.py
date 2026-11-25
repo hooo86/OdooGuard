@@ -25,7 +25,7 @@ import time
 from odooguard.config import Config, Destination
 from odooguard.files import Restic
 from odooguard.pg import PgBackRest
-from odooguard.util import OdooGuardError, check_free_space, io_probe, run_streaming
+from odooguard.util import OdooGuardError, check_free_space, io_probe, run, run_streaming
 
 log = logging.getLogger("odooguard")
 
@@ -58,11 +58,20 @@ def copy_pgbackrest(cfg: Config, dest: Destination, progress=None, verify: bool 
     """
     target = os.path.join(dest.path, "pgbackrest")
     os.makedirs(target, exist_ok=True)
+    from odooguard.files import RSYNC_ENV, rsync_progress_cb, rsync_transfer_size
+    src = cfg.repo_path.rstrip("/") + "/"
+    # Certains NAS (SMB) ne conservent pas la date de modification fixée par rsync : la
+    # date sur le NAS est celle de la copie. Comparer taille ET date renverrait alors tout
+    # le dépôt à chaque passage. Or les fichiers de données de pgBackRest ne changent
+    # jamais une fois écrits : comparaison sur la taille (--size-only), sans fixer de date.
+    # Les seuls fichiers réécrits (index backup.info / archive.info et leurs .copy, petits)
+    # sont recopiés à part, comparés sur leur contenu (--checksum).
     # --delete-after : les sauvegardes expirées localement sont retirées de la copie
     # seulement une fois tout le reste transféré. Pas d'ACL/propriétaire (CIFS).
-    from odooguard.files import RSYNC_ENV, rsync_progress_cb, rsync_transfer_size
-    cmd = ["rsync", "-rt", "--delete-after", "--stats", "--info=progress2", "--no-inc-recursive",
-           "--timeout=900", cfg.repo_path.rstrip("/") + "/", target + "/"]
+    index = ["--include=*/", "--include=*.info", "--include=*.info.copy", "--exclude=*"]
+    cmd = ["rsync", "-r", "--size-only", "--delete-after", "--exclude=*.info", "--exclude=*.info.copy",
+           "--stats", "--info=progress2", "--no-inc-recursive", "--timeout=900", src, target + "/"]
+    cmd_index = ["rsync", "-r", "--checksum", "--timeout=900", *index, src, target + "/"]
     total = None
     if progress is not None:
         progress.update(phase=f"analyse des changements à copier vers {dest.name}")
@@ -71,6 +80,7 @@ def copy_pgbackrest(cfg: Config, dest: Destination, progress=None, verify: bool 
         if total == 0:
             progress.update(percent=100.0, force=True)
     res = run_streaming(cmd, rsync_progress_cb(progress, total), env=RSYNC_ENV, timeout=6 * 3600)
+    run(cmd_index, env=RSYNC_ENV, timeout=1800)
     if not verify:
         return {"label": None, "rsync": res.stdout[-600:]}
     # Contrôle : la copie doit être lisible par pgBackRest et contenir la même
