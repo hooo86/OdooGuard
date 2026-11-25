@@ -34,13 +34,23 @@ def _split(value: str) -> list[str]:
 NOTIFY_CATEGORIES = {
     "echec": "Échec d'une sauvegarde, d'une copie ou du versement des WAL",
     "unite": "Service OdooGuard en échec (journal systemd joint, double du précédent)",
-    "etat": "État des sauvegardes : retard, NAS inaccessible, copie, flux WAL, Veeam, G:\\",
+    "etat": "État des sauvegardes : retard, flux WAL, test, Veeam, G:\\",
     "stockage": "Espace disque (OdooGuard, serveur Odoo, NAS)",
     "services": "Service arrêté (Odoo, PostgreSQL, nginx, OdooGuard...)",
     "intrusion": "Connexions Odoo échouées au-delà du seuil",
     "comptes": "Comptes Odoo créés, supprimés, archivés",
     "test": "Rapport du test de restauration hebdomadaire",
 }
+
+
+def notify_categories(cfg: "Config") -> dict[str, str]:
+    """Types de notification : les fixes, puis un par NAS (accès et copies vers ce NAS)."""
+    cats = dict(NOTIFY_CATEGORIES)
+    for d in cfg.destinations.values():
+        where = f" ({d.share})" if d.share else ""
+        cats[f"nas-{d.name}"] = (f"NAS {d.name}{where} : accès, copies et échecs de copie"
+                                 + ("" if d.enabled else " - suspendu"))
+    return cats
 
 
 @dataclass
@@ -440,4 +450,8 @@ def load(path: str | None = None, *, strict_perms: bool = True) -> Config:
                 token_file=r.get(section, "token_file", "") or "",
                 enabled=r.bool(section, "enabled", True),
             )
+    for name in cfg.destinations:  # envoi par type pour chaque NAS (connu après les sections)
+        raw = r.get("alerts", f"route_nas-{name}")
+        if raw is not None:
+            a.routes[f"nas-{name}"] = [c for c in _split(raw) if c in ("email", "telegram")]
     return cfg

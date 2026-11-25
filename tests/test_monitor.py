@@ -375,3 +375,52 @@ def test_notifications_page_routes(web):
     assert r.status_code == 303, re.findall(r'role="alert">([^<]*)', r.text)
     params = json.loads(hist.jobs_recent(1)[0]["params"])
     assert params["route_intrusion_telegram"] is True and params["route_intrusion_email"] is False
+
+
+# ------------------------------------------------------------------ NAS séparés, suspension
+def test_nas_categories_and_routes(cfg, monkeypatch):
+    from odooguard import config as config_mod
+    from odooguard import notify
+    from odooguard.config import notify_categories
+    cats = notify_categories(cfg)
+    assert {"nas-nas1", "nas-nas2"} <= set(cats)
+    assert notify.category_of("nas:nas2") == "nas-nas2" and notify.category_of("copy:nas1") == "nas-nas1"
+    assert notify.category_of("stockage:nas:nas1") == "stockage"
+    p = {"min_level": "warning", "repeat_hours": "4", "routes_present": True,
+         "route_nas-nas1_email": True, "route_nas-nas1_telegram": True}
+    settings.job_notify_save(cfg, p)
+    r = config_mod.load(cfg.path).alerts.routes
+    assert r["nas-nas1"] == ["email", "telegram"] and r["nas-nas2"] == []
+
+
+def test_nas_suspend_resolves_its_alerts(cfg, monkeypatch):
+    from odooguard import config as config_mod
+    from odooguard import notify
+    hist = History(cfg.history_db)
+    sent = []
+    monkeypatch.setattr(notify, "dispatch", lambda c, lvl, title, body, **k: sent.append((k["category"], title, body)) or {})
+    notify.Alerter(cfg, hist).process({"components": [{"name": "nas:nas2", "level": "critical", "message": "absent"},
+                                                      {"name": "db", "level": "ok"}]})
+    assert sent[-1][0] == "nas-nas2"
+    settings.job_nas_enable(cfg, {"name": "nas2", "enabled": False})
+    assert config_mod.load(cfg.path).destinations["nas2"].enabled is False
+    sent.clear()
+    notify.Alerter(cfg, hist, now=time.time() + 60).process({"components": [{"name": "db", "level": "ok"}]})
+    assert hist.alerts_active() == []
+    assert sent and sent[0][0] == "nas-nas2" and "n'est plus surveillé" in sent[0][2]
+    with pytest.raises(OdooGuardError):
+        settings.job_nas_enable(cfg, {"name": "inconnu", "enabled": True})
+
+
+def test_nas_page_suspend_button(web):
+    client, hist = web
+    ada = client("ada")
+    html = ada.get("/nas").text
+    assert 'action="/nas/nas2/enable"' in html and ">Suspendre<" in html
+    tok = re.search(r'name="csrf" value="([^"]+)"', html).group(1)
+    r = ada.post("/nas/nas2/enable", data={"csrf": tok, "enabled": "0"}, follow_redirects=False)
+    assert r.status_code == 303
+    job = hist.jobs_recent(1)[0]
+    assert job["kind"] == "nas-enable" and json.loads(job["params"]) == {"name": "nas2", "enabled": False}
+    notif = ada.get("/notifications").text
+    assert 'name="route_nas-nas2_telegram"' in notif

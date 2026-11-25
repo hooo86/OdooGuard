@@ -66,7 +66,8 @@ def tracked(ctx: Ctx, component: str, kind: str, func, *, alert: bool = True):
         ctx.history.finish(run_id, "failed", message=str(exc), category=cat, size=partial.get("size"),
                            added=partial.get("added"), label=partial.get("label"))
         if alert:
-            notify.send("critical", f"OdooGuard : échec {component} ({kind}) [{cat}]", str(exc)[:1500])
+            notify.send("critical", f"OdooGuard : échec {component} ({kind}) [{cat}]", str(exc)[:1500],
+                        category=notify.category_of(component) if component.startswith("copy:") else "echec")
         raise
     ctx.history.finish(run_id, "success", size=result.get("size"), added=result.get("added"),
                        label=result.get("label"), message=result.get("message", ""),

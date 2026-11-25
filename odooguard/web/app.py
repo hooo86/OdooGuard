@@ -581,6 +581,17 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         job_id = history.job_create(user, role, "nas-test", {"name": name})
         return RedirectResponse(f"/jobs/{job_id}", status_code=303)
 
+    @app.post("/nas/{name}/enable")
+    async def nas_enable(request: Request, name: str):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        if name not in fresh_cfg().destinations:
+            return page(request, "error.html", user=user, message="NAS inconnu.")
+        return queue(request, user, role, "nas-enable", {"name": name, "enabled": form.get("enabled") == "1"},
+                     target=f"nas:{name}")
+
     @app.post("/nas/{name}/remove")
     async def nas_remove(request: Request, name: str):
         form = dict(await request.form())
@@ -694,10 +705,11 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         user, role, err = require(request, "admin")
         if err:
             return err
-        a = fresh_cfg().alerts
-        from odooguard.config import NOTIFY_CATEGORIES
+        c = fresh_cfg()
+        a = c.alerts
+        from odooguard.config import notify_categories
         return page(request, "notifications.html", user=user, a=a, error=None, form=None,
-                    categories=NOTIFY_CATEGORIES,
+                    categories=notify_categories(c),
                     smtp_pw_set=secret_set(a.smtp_password_file),
                     tg_token_set=secret_set(a.telegram_token_file))
 
@@ -713,21 +725,22 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
                                                "telegram_chat_ids", "https_proxy")}
         for flag in ("use_email", "use_telegram", "send_resolved"):
             params[flag] = form.get(flag) == "on"
-        from odooguard.config import NOTIFY_CATEGORIES
+        from odooguard.config import notify_categories
+        cats = notify_categories(fresh_cfg())
         params["routes_present"] = form.get("routes_present") == "1"
-        for cat in NOTIFY_CATEGORIES:
+        for cat in cats:
             for ch in ("email", "telegram"):
                 params[f"route_{cat}_{ch}"] = form.get(f"route_{cat}_{ch}") == "on"
         a = fresh_cfg().alerts
         try:
-            settings.validate_notifications(params)
+            settings.validate_notifications({**params, "route_categories": list(cats)})
             if form.get("smtp_password"):
                 params["smtp_password_token"] = settings.stash_secret(cfg, form["smtp_password"])
             if form.get("telegram_token"):
                 params["telegram_token_token"] = settings.stash_secret(cfg, form["telegram_token"].strip())
         except OdooGuardError as exc:
             return page(request, "notifications.html", user=user, a=a, error=str(exc), form=form,
-                        categories=NOTIFY_CATEGORIES,
+                        categories=cats,
                         smtp_pw_set=secret_set(a.smtp_password_file),
                         tg_token_set=secret_set(a.telegram_token_file))
         return queue(request, user, role, "notify-save", params, target="notifications")

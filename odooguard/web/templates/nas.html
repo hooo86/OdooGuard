@@ -10,7 +10,7 @@
   <tbody>
   {% for r in rows %}{% set d = r.d %}
     <tr>
-      <th scope="row">{{ d.name }}{% if not d.enabled %}<div class="small muted">désactivé</div>{% endif %}</th>
+      <th scope="row">{{ d.name }}{% if not d.enabled %}<div><span class="badge badge-unknown">suspendu</span></div>{% endif %}</th>
       <td>{% if r.managed %}<code>{{ d.share }}</code><div class="small muted">compte {{ d.username }}{% if d.domain %} ({{ d.domain }}){% endif %} · SMB {{ d.smb_version }} · dossier {{ d.subdir }}</div>
           {% else %}<span class="muted">non configuré depuis le tableau de bord</span><div class="small muted">{{ d.mountpoint or d.path }}</div>{% endif %}</td>
       <td>{% if r.access %}{{ badge(r.access.level) }}<div class="small msg">{{ r.access.message }}</div>{% else %}—{% endif %}</td>
@@ -21,6 +21,9 @@
         <form method="post" action="/nas/{{ d.name }}/test" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Tester</button></form>
         {% endif %}
         {% if role == 'admin' %}
+        <form method="post" action="/nas/{{ d.name }}/enable" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="enabled" value="{{ '0' if d.enabled else '1' }}">
+          <button type="submit" title="{{ 'Plus de copie, de contrôle ni d\'alerte pour ce NAS jusqu\'à réactivation' if d.enabled else 'Reprendre les copies et les contrôles' }}">{{ "Suspendre" if d.enabled else "Réactiver" }}</button></form>
         <a class="button" href="/nas/{{ d.name }}/edit">{{ "Modifier" if r.managed else "Configurer" }}</a>
         <details class="remove"><summary>Retirer</summary>
           <form method="post" action="/nas/{{ d.name }}/remove">

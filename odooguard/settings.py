@@ -228,10 +228,9 @@ def validate_notifications(p: dict) -> dict:
         raise OdooGuardError("e-mail activé : serveur, expéditeur et destinataires sont obligatoires", "usage")
     if "telegram" in channels and not chats:
         raise OdooGuardError("Telegram activé : au moins un identifiant de conversation", "usage")
-    from odooguard.config import NOTIFY_CATEGORIES
     routes = {}
     if p.get("routes_present"):
-        for cat in NOTIFY_CATEGORIES:
+        for cat in p.get("route_categories") or []:
             routes[cat] = [c for c in ("email", "telegram") if p.get(f"route_{cat}_{c}")]
     return {"routes": routes, "channels": channels, "min_level": min_level, "repeat_hours": repeat,
             "send_resolved": bool(p.get("send_resolved")), "smtp_host": host, "smtp_port": port,
@@ -240,7 +239,8 @@ def validate_notifications(p: dict) -> dict:
 
 
 def job_notify_save(cfg: Config, params: dict) -> dict:
-    v = validate_notifications(params)
+    from odooguard.config import notify_categories
+    v = validate_notifications({**params, "route_categories": list(notify_categories(cfg))})
     a = cfg.alerts
     smtp_pw_file = a.smtp_password_file or os.path.join(os.path.dirname(cfg.path), "smtp.pass")
     tg_file = a.telegram_token_file or os.path.join(os.path.dirname(cfg.path), "telegram.token")
@@ -256,7 +256,7 @@ def job_notify_save(cfg: Config, params: dict) -> dict:
         raise OdooGuardError("Telegram activé : jeton du bot obligatoire", "usage")
     alerts = {"channels": ", ".join(v["channels"]), "min_level": v["min_level"],
               "repeat_hours": f"{v['repeat_hours']:g}", "send_resolved": "yes" if v["send_resolved"] else "no"}
-    routes = v["routes"] or a.routes  # formulaire sans le tableau : réglage par type conservé
+    routes = {**a.routes, **v["routes"]}  # formulaire sans le tableau : réglage par type conservé
     for cat, chans in routes.items():
         alerts[f"route_{cat}"] = ", ".join(chans) if chans else "aucun"
     write_section(cfg.path, "alerts", alerts)
@@ -453,3 +453,15 @@ def job_databases_save(cfg: Config, params: dict) -> dict:
     return {"databases": dbs, "before": before,
             "message": "bases Odoo suivies : " + ", ".join(dbs) + (f" (avant : {', '.join(before)})"
                                                                if before != dbs else "")}
+
+
+def job_nas_enable(cfg: Config, params: dict) -> dict:
+    """Suspend ou réactive un NAS (copies, contrôles et alertes) sans le démonter ni le retirer."""
+    name = str(params.get("name", ""))
+    if name not in cfg.destinations:
+        raise OdooGuardError(f"NAS inconnu : {name}", "usage")
+    on = bool(params.get("enabled"))
+    set_option(cfg.path, f"destination:{name}", "enabled", "yes" if on else "no")
+    return {"name": name, "enabled": on,
+            "message": f"NAS {name} " + ("réactivé : copies et contrôles reprennent" if on else
+                                         "suspendu : plus de copie, de contrôle ni d'alerte jusqu'à réactivation")}

@@ -191,6 +191,8 @@ def send(level: str, title: str, body: str = "", *, key: str = "event", category
 
 def category_of(component: str) -> str:
     """Catégorie de notification d'un composant de l'état global."""
+    if component.startswith(("nas:", "copy:")):
+        return "nas-" + component.split(":", 1)[1]
     if component.startswith(("stockage:", "disk:")):
         return "stockage"
     if component.startswith(("service:", "surveillance")):
@@ -250,6 +252,13 @@ class Alerter:
                 since = fmt_age(self.now - cur["first_seen"])
                 g["ok"].append(f"{ICON['ok']} {key} : résolu (problème apparu il y a {since})")
                 self.history.alert_put(key, level="ok", resolved_at=self.now, message=msg)
+        # Composant qui n'est plus surveillé (NAS suspendu ou retiré...) : son alerte est close
+        present = {c["name"] for c in status.get("components", [])}
+        for al in self.history.alerts_active():
+            if al["key"] not in present and al["key"] not in ("test",):
+                self.history.alert_put(al["key"], level="ok", resolved_at=self.now,
+                                       message="n'est plus surveillé (suspendu ou retiré)")
+                grp(category_of(al["key"]))["ok"].append(f"{ICON['ok']} {al['key']} : n'est plus surveillé")
         results = {}
         for cat, g in groups.items():
             if not (g["new"] or g["rem"] or (g["ok"] and a.send_resolved)):
@@ -267,7 +276,10 @@ class Alerter:
                              f"fichiers {fmt_age(rpo.get('files_seconds'))}. "
                              f"État global : {LEVEL_FR.get(status.get('overall'), status.get('overall'))}.")
             n_bad = len(g["new"]) + len(g["rem"])
-            bad_title, ok_title = CATEGORY_TITLE[cat]
+            if cat.startswith("nas-"):
+                bad_title, ok_title = f"problème(s) {cat[4:]}", f"{cat[4:]} : retour à la normale"
+            else:
+                bad_title, ok_title = CATEGORY_TITLE[cat]
             title = f"{n_bad} {bad_title}" if n_bad else ok_title
             results[cat] = dispatch(self.cfg, g["worst"] if n_bad else "ok", title, "\n\n".join(parts),
                                     key="status" if cat == "etat" else f"status:{cat}",

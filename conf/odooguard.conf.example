@@ -121,7 +121,7 @@ send_resolved = yes
 
 # Envoi par type de notification (facultatif ; absent = tous les canaux activés) :
 #   route_<type> = email, telegram | email | telegram | aucun
-#   types : echec, unite, etat, stockage, services, intrusion, comptes, test
+#   types : echec, unite, etat, stockage, services, intrusion, comptes, test, nas-<nom du NAS>
 # route_unite = aucun
 
 [smtp]

@@ -63,9 +63,11 @@ def test_escalation_is_notified(cfg, hist, rec):
 
 
 def test_grouped_in_one_message(cfg, hist, rec):
-    notify.Alerter(cfg, hist).process(status(db="critical", **{"nas:nas1": "critical", "wal": "warning"}))
-    assert len(rec.sent) == 1
-    assert "3 problème(s)" in rec.sent[0][1]
+    """Un message par type : sauvegardes ensemble, chaque NAS à part (réglages d'envoi séparés)."""
+    notify.Alerter(cfg, hist).process(status(db="critical", **{"nas:nas1": "critical", "copy:nas1": "warning",
+                                                               "wal": "warning"}))
+    titles = sorted(t for _, t, *_ in rec.sent)
+    assert titles == ["2 problème(s) de sauvegarde", "2 problème(s) nas1"]
 
 
 def test_min_level_critical_skips_warning(cfg, hist, rec):
