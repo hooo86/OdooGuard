@@ -110,6 +110,22 @@ def unit_state(unit: str) -> dict:
             "since": s.get("ActiveEnterTimestamp", ""), "restarts": s.get("NRestarts")}
 
 
+WEB_SERVERS = ("nginx.service", "apache2.service")
+
+
+def ignore_spare_web_server(services: list[dict]) -> list[dict]:
+    """Un seul serveur web sert Odoo : l'autre, installé mais arrêté, n'est pas une panne.
+
+    (Les agents récents l'écartent déjà s'il est désactivé ; ceci couvre les plus anciens.)
+    """
+    active_web = any(s.get("unit") in WEB_SERVERS and s.get("active") == "active" for s in services)
+    if not active_web:
+        return services
+    return [s for s in services
+            if not (s.get("unit") in WEB_SERVERS and s.get("active") in ("inactive", "dead")
+                    and s.get("enabled") != "enabled")]
+
+
 def service_level(svc: dict) -> str:
     if svc.get("active") in ("active", "reloading"):
         return "ok"
@@ -247,7 +263,8 @@ def collect(cfg: Config, history: History, *, query_source: bool = True,
         for d in remote.get("disks", []):
             data["storage"].append(disk_entry(cfg, ODOO_HOST, d.get("label", ""), d["mount"],
                                               d["total"], d["free"], d.get("used")))
-        for s in remote.get("services", []):
+        remote_svcs = ignore_spare_web_server(remote.get("services", []))
+        for s in remote_svcs:
             s.update(host=ODOO_HOST, level=service_level(s))
             data["services"].append(s)
         data["failed_units"][ODOO_HOST] = remote.get("failed_units", [])

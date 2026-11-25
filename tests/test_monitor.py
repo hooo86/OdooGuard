@@ -277,3 +277,17 @@ def test_surveillance_and_timezone_forms(web):
     assert 'data-schedule-form' in form and "/static/schedule.js" in form and 'name="interval_minute"' in form
     notif = ada.get("/notifications").text
     assert 'name="channel" value="telegram"' in notif
+
+
+def test_spare_web_server_ignored():
+    svcs = [{"unit": "nginx.service", "active": "active"}, {"unit": "apache2.service", "active": "inactive"},
+            {"unit": "odoo.service", "active": "inactive"}]
+    kept = [s["unit"] for s in monitor.ignore_spare_web_server(svcs)]
+    assert kept == ["nginx.service", "odoo.service"]       # Odoo arrêté reste signalé
+    # aucun serveur web actif : les deux restent visibles
+    both_down = [{"unit": "nginx.service", "active": "failed"}, {"unit": "apache2.service", "active": "inactive"}]
+    assert len(monitor.ignore_spare_web_server(both_down)) == 2
+    # apache2 activé au démarrage mais arrêté : c'est une panne, on le garde
+    enabled = [{"unit": "nginx.service", "active": "active"},
+               {"unit": "apache2.service", "active": "inactive", "enabled": "enabled"}]
+    assert len(monitor.ignore_spare_web_server(enabled)) == 2
