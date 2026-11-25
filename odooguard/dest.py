@@ -49,7 +49,13 @@ def preflight(dest: Destination) -> dict:
     return {"probe_seconds": round(probe, 3)}
 
 
-def copy_pgbackrest(cfg: Config, dest: Destination, progress=None) -> dict:
+def copy_pgbackrest(cfg: Config, dest: Destination, progress=None, verify: bool = True) -> dict:
+    """rsync du dépôt pgBackRest vers le NAS, puis (verify) contrôle de la dernière sauvegarde.
+
+    Appelée deux fois par la copie : une passe principale SANS verrou (longue : les
+    sauvegardes continuent pendant ce temps), puis une passe finale courte SOUS le verrou
+    « db », qui rattrape les derniers changements et vérifie une copie cohérente.
+    """
     target = os.path.join(dest.path, "pgbackrest")
     os.makedirs(target, exist_ok=True)
     # --delete-after : les sauvegardes expirées localement sont retirées de la copie
@@ -65,6 +71,8 @@ def copy_pgbackrest(cfg: Config, dest: Destination, progress=None) -> dict:
         if total == 0:
             progress.update(percent=100.0, force=True)
     res = run_streaming(cmd, rsync_progress_cb(progress, total), env=RSYNC_ENV, timeout=6 * 3600)
+    if not verify:
+        return {"label": None, "rsync": res.stdout[-600:]}
     # Contrôle : la copie doit être lisible par pgBackRest et contenir la même
     # dernière sauvegarde que le dépôt local.
     local = PgBackRest(cfg).info().last()

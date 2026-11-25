@@ -201,14 +201,23 @@ def cmd_backup(ctx: Ctx) -> int:
 
             def job(dest=dest):
                 probe = dest_mod.preflight(dest)
-                # Sous les deux verrous : aucune sauvegarde ne modifie les dépôts pendant la copie
-                with file_lock(cfg.lock_dir, "db", wait=3600), file_lock(cfg.lock_dir, "files", wait=3600), \
-                        Progress(cfg.state_dir, f"copy:{dest.name}", f"Copie vers {dest.name}") as prog:
-                    pgr = dest_mod.copy_pgbackrest(cfg, dest, progress=prog)
+                with Progress(cfg.state_dir, f"copy:{dest.name}", f"Copie vers {dest.name}") as prog:
+                    # 1. Passe principale SANS verrou : longue, mais les sauvegardes de la base
+                    #    et des fichiers continuent à l'heure prévue pendant ce temps.
+                    dest_mod.copy_pgbackrest(cfg, dest, progress=prog, verify=False)
+                    # 2. Passe finale sous le verrou « db » (rattrapage des derniers fichiers, quelques
+                    #    minutes) : copie cohérente, contrôlée par pgBackRest.
+                    prog.update(phase=f"finalisation et vérification de la copie de la base vers {dest.name}")
+                    with file_lock(cfg.lock_dir, "db", wait=3600):
+                        pgr = dest_mod.copy_pgbackrest(cfg, dest, progress=prog)
+                    # 3. restic gère lui-même la concurrence (verrous non exclusifs) ; le verrou
+                    #    « files » écarte seulement la maintenance (suppression d'instantanés).
                     prog.update(phase=f"copie du dépôt fichiers (restic) vers {dest.name}")
-                    rr = dest_mod.copy_restic(cfg, dest)
+                    with file_lock(cfg.lock_dir, "files", wait=3600):
+                        rr = dest_mod.copy_restic(cfg, dest)
                     prog.update(phase="écriture du manifeste de vérification")
-                    # Référence pour la copie hors ligne G:\ (phase 3 bis)
+                    # Référence pour la copie hors ligne G:\ (phase 3 bis) : liste le contenu du
+                    # NAS lui-même (modifié seulement par cette copie), donc sans verrou
                     man = dest_mod.write_manifest(cfg, dest, pgr["label"], rr["snapshots"])
                 return {"label": pgr["label"], "message": "copie vérifiée", "size": man["total_bytes"],
                         **probe, **rr, **man}

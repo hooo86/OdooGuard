@@ -646,3 +646,33 @@ def test_copy_skips_nas_removed_during_run(cfg, monkeypatch, capsys):
     except Exception:
         pass
     assert "copy:nas2" not in calls and "copy:nas1" in calls
+
+
+def test_copy_holds_db_lock_only_for_final_pass(cfg, monkeypatch):
+    import types
+    from odooguard import cli, dest as dest_mod, util
+    events = []
+    held = set()
+    real_lock = util.file_lock
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_lock(lock_dir, name, wait=0):
+        held.add(name); events.append(("lock", name))
+        try:
+            yield
+        finally:
+            held.discard(name)
+    monkeypatch.setattr(cli, "file_lock", fake_lock)
+    monkeypatch.setattr(dest_mod, "preflight", lambda d: {})
+    monkeypatch.setattr(dest_mod, "copy_pgbackrest",
+                        lambda c, d, progress=None, verify=True: events.append(("pg", verify, "db" in held)) or {"label": "L"})
+    monkeypatch.setattr(dest_mod, "copy_restic", lambda c, d: events.append(("restic", "files" in held)) or {"snapshots": 1})
+    monkeypatch.setattr(dest_mod, "write_manifest", lambda c, d, l, n: events.append(("man", set(held))) or {"total_bytes": 1})
+    monkeypatch.setattr(cli, "tracked", lambda ctx, comp, kind, job, **k: job())
+    ctx = types.SimpleNamespace(cfg=cfg, args=types.SimpleNamespace(what="copy", dest="nas1", wait=0), history=None)
+    cli.cmd_backup(ctx)
+    assert ("pg", False, False) in events          # passe principale sans verrou
+    assert ("pg", True, True) in events            # passe finale vérifiée sous le verrou db
+    assert ("restic", True) in events and ("man", set()) in events
