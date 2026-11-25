@@ -30,7 +30,7 @@
   Commande : <code>odooguard restore db --db LNHC_Prod_2025 --as COPIE --time "AAAA-MM-JJ HH:MM" --target testvm</code></p>
 <h2>Base de données (pgBackRest)</h2>
 <div class="table-wrap"><table>
-  <thead><tr><th>Étiquette</th><th>Type</th><th>Début</th><th>Fin</th><th>Durée</th><th>Taille base</th><th>Taille dépôt</th><th>Ajouté</th></tr></thead>
+  <thead><tr><th>Étiquette</th><th>Type</th><th>Début</th><th>Fin</th><th class="num">Durée</th><th class="num">Taille base</th><th class="num">Taille dépôt</th><th class="num">Ajouté</th></tr></thead>
   <tbody>
   {% for b in db %}
     <tr><td><code>{{ b.label }}</code></td><td>{{ {'full': 'complète', 'diff': 'différentielle', 'incr': 'incrémentale'}[b.type] }}</td>
@@ -41,7 +41,7 @@
 </table></div>
 <h2>Fichiers (restic, 100 derniers instantanés)</h2>
 <div class="table-wrap"><table>
-  <thead><tr><th>Instantané</th><th>Date</th><th>Taille traitée</th><th>Ajouté</th></tr></thead>
+  <thead><tr><th>Instantané</th><th>Date</th><th class="num">Taille traitée</th><th class="num">Ajouté</th></tr></thead>
   <tbody>
   {% for s in files %}
     <tr><td><code>{{ s.short_id }}</code></td><td class="nowrap">{{ fmt_time(s.ts) if s.ts else s.time[:19].replace('T', ' ') }}</td>

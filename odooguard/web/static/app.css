@@ -213,6 +213,7 @@ thead th { font: 600 11px/14px var(--font-body); letter-spacing: .3px; text-tran
            color: var(--on-surface-variant); background: var(--surface-low); border-top: none; }
 tbody tr { transition: background-color var(--t-state); }
 tbody tr:hover { background: var(--surface-low); }
+th.num { text-align: right; }
 td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; font-family: var(--font-mono); font-size: 12.5px; }
 td.msg { color: var(--on-surface-variant); max-width: 520px; overflow-wrap: anywhere; }
 tbody th { font-weight: 600; }

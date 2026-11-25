@@ -36,7 +36,7 @@
 {% if top %}
 <div class="table-wrap"><table>
   <caption>Adresses à l'origine des échecs</caption>
-  <thead><tr><th>Adresse IP</th><th>Échecs</th><th>Identifiants essayés</th><th>Dernier essai</th></tr></thead>
+  <thead><tr><th>Adresse IP</th><th class="num">Échecs</th><th class="num">Identifiants essayés</th><th>Dernier essai</th></tr></thead>
   <tbody>{% for t in top %}<tr><td class="mono">{{ t.ip }}</td><td class="num">{{ t.n }}</td><td class="num">{{ t.logins }}</td><td class="nowrap">{{ fmt_time(t.last) }}</td></tr>{% endfor %}</tbody>
 </table></div>
 {% endif %}

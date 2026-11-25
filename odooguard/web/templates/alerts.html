@@ -6,7 +6,7 @@
 <p>Canaux configurés : {% for c in channels %}<code>{{ c }}</code> {% endfor %} — test : <code>odooguard alert-test</code></p>
 <h2>Problèmes en cours</h2>
 <div class="table-wrap"><table>
-  <thead><tr><th>Composant</th><th>Niveau</th><th>Depuis</th><th>Dernier envoi</th><th>Envois</th><th>Message</th></tr></thead>
+  <thead><tr><th>Composant</th><th>Niveau</th><th>Depuis</th><th>Dernier envoi</th><th class="num">Envois</th><th>Message</th></tr></thead>
   <tbody>
   {% for a in active %}
     <tr><td>{{ a.key }}</td><td>{{ badge(a.level) }}</td><td>{{ fmt_time(a.first_seen) }}</td>
