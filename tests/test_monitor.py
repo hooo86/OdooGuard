@@ -484,12 +484,13 @@ def test_age_message_consistent_with_level():
 def test_thresholds_roundtrip(cfg):
     from odooguard import config as config_mod
     settings.job_thresholds_save(cfg, {"wal_max_lag": "10", "db_any_max_age": "2", "db_full_max_age": "8",
-                                       "files_max_age": "1", "copy_max_age": "26"})
-    m = config_mod.load(cfg.path).max_age
-    assert m == {"wal": 600, "db_any": 7200, "db_full": 8 * 86400, "files": 3600, "copy": 26 * 3600}
+                                       "files_max_age": "1", "copy_max_age": "26", "restore_test_max_age": "15"})
+    c = config_mod.load(cfg.path)
+    assert c.max_age == {"wal": 600, "db_any": 7200, "db_full": 8 * 86400, "files": 3600, "copy": 26 * 3600}
+    assert c.restore_test.max_age == 15 * 86400
     with pytest.raises(OdooGuardError):
         settings.validate_thresholds({"wal_max_lag": "0", "db_any_max_age": "2", "db_full_max_age": "8",
-                                      "files_max_age": "1", "copy_max_age": "26"})
+                                      "files_max_age": "1", "copy_max_age": "26", "restore_test_max_age": "8"})
 
 
 def test_thresholds_form(web):
@@ -499,7 +500,8 @@ def test_thresholds_form(web):
     assert 'name="copy_max_age"' in html
     tok = re.search(r'name="csrf" value="([^"]+)"', html).group(1)
     r = ada.post("/surveillance/seuils", data={"csrf": tok, "wal_max_lag": "10", "db_any_max_age": "2",
-                                               "db_full_max_age": "8", "files_max_age": "1", "copy_max_age": "26"},
+                                               "db_full_max_age": "8", "files_max_age": "1", "copy_max_age": "26",
+                                               "restore_test_max_age": "8"},
                  follow_redirects=False)
     assert r.status_code == 303 and hist.jobs_recent(1)[0]["kind"] == "thresholds-save"
 
@@ -600,3 +602,15 @@ def test_failure_mail_is_short():
     assert "Broken pipe" in body and "Number of" not in body and "speedup" not in body
     assert what_fr("db", "incr") == "sauvegarde incrémentale de la base"
     assert what_fr("copy:nas1", "copy") == "copie vers nas1"
+
+
+def test_restore_test_threshold_without_section_key(cfg):
+    from odooguard import config as config_mod
+    text = open(cfg.path).read()
+    i = text.index("[restore_test]")
+    j = text.index("max_age", i)
+    k = text.index("\n", j)
+    open(cfg.path, "w").write(text[:j] + "# (retiré)" + text[k:])
+    settings.job_thresholds_save(cfg, {"wal_max_lag": "10", "db_any_max_age": "2", "db_full_max_age": "8",
+                                       "files_max_age": "1", "copy_max_age": "26", "restore_test_max_age": "10"})
+    assert config_mod.load(cfg.path).restore_test.max_age == 10 * 86400

@@ -416,7 +416,9 @@ def load(path: str | None = None, *, strict_perms: bool = True) -> Config:
     t.max_staleness_days = r.float("restore_test", "max_staleness_days", t.max_staleness_days)
     t.start_odoo = r.bool("restore_test", "start_odoo", True)
     t.http_timeout = r.int("restore_test", "http_timeout", t.http_timeout)
-    t.max_age = r.int("restore_test", "max_age", t.max_age)
+    # Seuil réglable depuis le tableau de bord ([thresholds] restore_test_max_age) si la
+    # section [restore_test] ne le fixe pas elle-même
+    t.max_age = r.int("restore_test", "max_age", r.int("thresholds", "restore_test_max_age", t.max_age))
 
     m = cfg.monitoring
     m.disk_warn_pct = r.float("monitoring", "disk_warn_pct", m.disk_warn_pct)

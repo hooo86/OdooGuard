@@ -114,6 +114,18 @@ def write_section(cfg_path: str, header: str, values: dict | None, comment: str 
     _commit(cfg_path, lines, new)
 
 
+def _section_lines(text: str, header: str) -> list[str]:
+    out, inside = [], False
+    for line in text.splitlines():
+        m = SECTION_RE.match(line)
+        if m:
+            inside = m.group(1).strip() == header
+            continue
+        if inside:
+            out.append(line)
+    return out
+
+
 def set_option(cfg_path: str, header: str, key: str, value: str) -> None:
     """Change UNE clé d'une section existante, sans toucher au reste de la section."""
     if "\n" in str(value):
@@ -545,6 +557,7 @@ THRESHOLDS = {
     "db_full_max_age": ("dernière sauvegarde complète (jours)", 86400, 1, 90),
     "files_max_age": ("dernière sauvegarde des fichiers (heures)", 3600, 0.25, 720),
     "copy_max_age": ("dernière copie vers les NAS (heures)", 3600, 1, 720),
+    "restore_test_max_age": ("dernier test de restauration réussi (jours)", 86400, 1, 90),
 }
 
 
@@ -563,7 +576,13 @@ def validate_thresholds(p: dict) -> dict:
 
 def job_thresholds_save(cfg: Config, params: dict) -> dict:
     v = validate_thresholds(params)
-    write_section(cfg.path, "thresholds", {k: v[k] for k in THRESHOLDS},
+    values = {k: v[k] for k in THRESHOLDS}
+    with open(cfg.path, encoding="utf-8") as fh:
+        has_rt_key = any(re.match(r"^\s*max_age\s*=", l) for l in _section_lines(fh.read(), "restore_test"))
+    if has_rt_key:
+        # [restore_test] max_age prime : c'est lui qu'on met à jour
+        set_option(cfg.path, "restore_test", "max_age", str(values.pop("restore_test_max_age")))
+    write_section(cfg.path, "thresholds", values,
                   comment="Âge maximal (secondes) avant alerte critique - modifié depuis le tableau de bord")
     from odooguard.util import fmt_age
     return {**v, "message": "seuils de retard enregistrés : " + ", ".join(

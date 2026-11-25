@@ -920,9 +920,10 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         from odooguard import schedule, settings
         cur = {"wal_max_lag": c.max_age["wal"], "db_any_max_age": c.max_age["db_any"],
                "db_full_max_age": c.max_age["db_full"], "files_max_age": c.max_age["files"],
-               "copy_max_age": c.max_age["copy"]}
+               "copy_max_age": c.max_age["copy"], "restore_test_max_age": c.restore_test.max_age}
         timer = {"db_any_max_age": "odooguard-backup-db-incr.timer", "db_full_max_age": "odooguard-backup-db-full.timer",
-                 "files_max_age": "odooguard-backup-files.timer", "copy_max_age": "odooguard-copy.timer"}
+                 "files_max_age": "odooguard-backup-files.timer", "copy_max_age": "odooguard-copy.timer",
+                 "restore_test_max_age": "odooguard-restore-test.timer"}
         rows = []
         for key, (lib, unit, lo, hi) in settings.THRESHOLDS.items():
             plan = None
