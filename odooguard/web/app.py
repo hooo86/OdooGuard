@@ -805,6 +805,40 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
                         found_err=found_err, error=str(exc))
         return queue(request, user, role, "databases-save", {"databases": dbs}, target="bases")
 
+    # ---- rétention
+    def retention_ctx(c: Config) -> dict:
+        from odooguard import schedule
+        from odooguard.pg import PgBackRest
+        eff = PgBackRest(c).retention_effective()
+        try:
+            full_plan = " ; ".join(schedule.current("odooguard-backup-db-full.timer")["specs"])
+        except Exception:  # noqa: BLE001
+            full_plan = ""
+        return {"full": eff["full"] or 4, "diff": eff["diff"] or 7, "keep": c.restic_keep, "full_plan": full_plan}
+
+    @app.get("/retention", response_class=HTMLResponse)
+    def retention(request: Request):
+        user, role, err = require(request, "lecteur")
+        if err:
+            return err
+        return page(request, "retention.html", user=user, r=retention_ctx(fresh_cfg()), form=None, error=None)
+
+    @app.post("/retention/save")
+    async def retention_save(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        from odooguard import settings
+        params = {k: form.get(k, "") for k in ("retention_full", "retention_diff", "keep_hourly", "keep_daily",
+                                               "keep_weekly", "keep_monthly")}
+        try:
+            settings.validate_retention(params)
+        except OdooGuardError as exc:
+            return page(request, "retention.html", user=user, r=retention_ctx(fresh_cfg()), form=form,
+                        error=str(exc))
+        return queue(request, user, role, "retention-save", params, target="retention")
+
     # ---- VM de test
     TESTVM_FIELDS = ("label", "host", "odoo_url", "pg_version", "pg_cluster", "odoo_service", "odoo_conf",
                      "filestore_path")

@@ -502,3 +502,34 @@ def test_thresholds_form(web):
                                                "db_full_max_age": "8", "files_max_age": "1", "copy_max_age": "26"},
                  follow_redirects=False)
     assert r.status_code == 303 and hist.jobs_recent(1)[0]["kind"] == "thresholds-save"
+
+
+def test_retention_roundtrip_and_backup_args(cfg, monkeypatch):
+    from odooguard import config as config_mod
+    from odooguard import pg
+    with pytest.raises(OdooGuardError):
+        settings.validate_retention({"retention_full": "4", "retention_diff": "7", "keep_hourly": "0",
+                                     "keep_daily": "0", "keep_weekly": "0", "keep_monthly": "0"})
+    settings.job_retention_save(cfg, {"retention_full": "6", "retention_diff": "10", "keep_hourly": "24",
+                                      "keep_daily": "30", "keep_weekly": "8", "keep_monthly": "24"})
+    c = config_mod.load(cfg.path)
+    assert (c.retention_full, c.retention_diff) == (6, 10)
+    assert c.restic_keep == {"hourly": "24", "daily": "30", "weekly": "8", "monthly": "24"}
+    assert c.file_sources == cfg.file_sources
+    seen = []
+    monkeypatch.setattr(pg.PgBackRest, "exec", lambda self, *a, **k: seen.append(a))
+    pg.PgBackRest(c).backup("incr")
+    assert "--repo1-retention-full=6" in seen[0] and "--repo1-retention-diff=10" in seen[0]
+    assert seen[0][-2:] == ("--type=incr", "backup")
+
+
+def test_retention_page(web):
+    client, hist = web
+    ada = client("ada")
+    html = ada.get("/retention").text
+    assert 'name="retention_full"' in html and 'name="keep_monthly"' in html
+    tok = re.search(r'name="csrf" value="([^"]+)"', html).group(1)
+    r = ada.post("/retention/save", data={"csrf": tok, "retention_full": "4", "retention_diff": "7",
+                                          "keep_hourly": "48", "keep_daily": "14", "keep_weekly": "8",
+                                          "keep_monthly": "12"}, follow_redirects=False)
+    assert r.status_code == 303 and hist.jobs_recent(1)[0]["kind"] == "retention-save"

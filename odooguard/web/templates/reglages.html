@@ -4,6 +4,7 @@
 {% block content %}
 <div class="settings-grid">
   <a class="card settings-card" href="/bases"><strong>{{ icon("database") }}Bases Odoo</strong><span class="muted">Bases suivies : restauration, test hebdomadaire, surveillance.</span></a>
+  <a class="card settings-card" href="/retention"><strong>{{ icon("history") }}Rétention</strong><span class="muted">Combien de temps les sauvegardes de la base et des fichiers sont conservées.</span></a>
   <a class="card settings-card" href="/vm-test"><strong>{{ icon("dns") }}VM de test</strong><span class="muted">Nom, adresse et réglages de la VM des tests de restauration, test de connexion.</span></a>
   <a class="card settings-card" href="/surveillance"><strong>{{ icon("monitor_heart") }}Surveillance</strong><span class="muted">Seuils d'espace disque, services surveillés, sécurité d'Odoo.</span></a>
   {% if role == 'admin' %}

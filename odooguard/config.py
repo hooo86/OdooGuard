@@ -199,6 +199,9 @@ class Config:
     pg_shadow: str = "/var/lib/odooguard/pgshadow"
     wal_keep_local: int = 256  # segments déjà archivés conservés dans le spool
     wal_receiver_unit: str = "odooguard-walreceiver.service"
+    # Rétention réglée depuis le tableau de bord (None = celle de pgbackrest.conf)
+    retention_full: int | None = None
+    retention_diff: int | None = None
     pg_bin_dir: str = ""  # /usr/lib/postgresql/<ver>/bin
 
     # restic
@@ -349,6 +352,9 @@ def load(path: str | None = None, *, strict_perms: bool = True) -> Config:
     cfg.pg_shadow = r.get("pgbackrest", "pg_shadow", cfg.pg_shadow)
     cfg.wal_keep_local = r.int("pgbackrest", "wal_keep_local", cfg.wal_keep_local)
     cfg.wal_receiver_unit = r.get("pgbackrest", "wal_receiver_unit", cfg.wal_receiver_unit)
+    rf, rd = r.get("pgbackrest", "retention_full"), r.get("pgbackrest", "retention_diff")
+    cfg.retention_full = int(rf) if rf not in (None, "") else None
+    cfg.retention_diff = int(rd) if rd not in (None, "") else None
     cfg.pg_bin_dir = r.get(
         "pgbackrest", "pg_bin_dir", f"/usr/lib/postgresql/{cfg.source.pg_version}/bin"
     )

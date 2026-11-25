@@ -35,7 +35,7 @@
         <a href="/alerts" {% if section == 'alerts' %}aria-current="page"{% endif %}><span>{{ icon('notifications_active') }}Alertes</span>{% if alerts_count %}<span class="nav-badge" role="status" aria-label="{{ alerts_count }} alerte(s) active(s)">{{ alerts_count }}</span>{% endif %}</a>
         <a href="/securite" {% if section == 'securite' %}aria-current="page"{% endif %}><span>{{ icon('security') }}Sécurité Odoo</span></a>
         <a href="/audit" {% if section == 'audit' %}aria-current="page"{% endif %}><span>{{ icon('receipt_long') }}Audit</span></a>
-        <a href="/reglages" {% if section in ('reglages', 'nas', 'notifications', 'utilisateurs', 'surveillance', 'bases', 'vm-test') %}aria-current="page"{% endif %}><span>{{ icon('settings') }}Réglages</span></a>
+        <a href="/reglages" {% if section in ('reglages', 'nas', 'notifications', 'utilisateurs', 'surveillance', 'bases', 'vm-test', 'retention') %}aria-current="page"{% endif %}><span>{{ icon('settings') }}Réglages</span></a>
       </nav>
     </div>
     <div class="sidebar-foot">

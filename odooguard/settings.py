@@ -568,3 +568,38 @@ def job_thresholds_save(cfg: Config, params: dict) -> dict:
     from odooguard.util import fmt_age
     return {**v, "message": "seuils de retard enregistrés : " + ", ".join(
         f"{THRESHOLDS[k][0].split(' (')[0]} {fmt_age(v[k])}" for k in THRESHOLDS)}
+
+
+# ------------------------------------------------------------------ rétention
+RESTIC_KEEP = {"hourly": ("horaires", 0, 1000), "daily": ("journaliers", 0, 3650),
+               "weekly": ("hebdomadaires", 0, 520), "monthly": ("mensuels", 0, 240)}
+
+
+def validate_retention(p: dict) -> dict:
+    def num(key, lo, hi, lib):
+        try:
+            v = int(str(p.get(key, "")).strip())
+        except ValueError:
+            raise OdooGuardError(f"{lib} : nombre entier attendu", "usage") from None
+        if not lo <= v <= hi:
+            raise OdooGuardError(f"{lib} : entre {lo} et {hi}", "usage")
+        return v
+    v = {"retention_full": num("retention_full", 1, 52, "sauvegardes complètes conservées"),
+         "retention_diff": num("retention_diff", 1, 60, "différentielles conservées")}
+    for k, (lib, lo, hi) in RESTIC_KEEP.items():
+        v[f"keep_{k}"] = num(f"keep_{k}", lo, hi, f"instantanés {lib}")
+    if not any(v[f"keep_{k}"] for k in RESTIC_KEEP):
+        raise OdooGuardError("fichiers : garder au moins un instantané (sinon tout serait supprimé)", "usage")
+    return v
+
+
+def job_retention_save(cfg: Config, params: dict) -> dict:
+    v = validate_retention(params)
+    set_option(cfg.path, "pgbackrest", "retention_full", str(v["retention_full"]))
+    set_option(cfg.path, "pgbackrest", "retention_diff", str(v["retention_diff"]))
+    for k in RESTIC_KEEP:
+        set_option(cfg.path, "restic", f"keep_{k}", str(v[f"keep_{k}"]))
+    return {**v, "message": (f"rétention enregistrée : base {v['retention_full']} complète(s) et "
+                             f"{v['retention_diff']} différentielle(s) ; fichiers {v['keep_hourly']} h / "
+                             f"{v['keep_daily']} j / {v['keep_weekly']} sem. / {v['keep_monthly']} mois. "
+                             "Appliquée à la prochaine sauvegarde de la base et à la prochaine maintenance.")}

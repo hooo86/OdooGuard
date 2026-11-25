@@ -157,8 +157,31 @@ class PgBackRest:
         if kind not in ("full", "diff", "incr"):
             raise OdooGuardError(f"type de sauvegarde inconnu : {kind}", "usage")
         # « expire » est exécuté automatiquement par pgBackRest après une
-        # sauvegarde réussie, selon repo1-retention-full / -diff.
-        return self.exec(f"--type={kind}", "backup")
+        # sauvegarde réussie, selon repo1-retention-full / -diff : ceux réglés depuis le
+        # tableau de bord ([pgbackrest] retention_*) priment sur pgbackrest.conf.
+        return self.exec(*self.retention_args(), f"--type={kind}", "backup")
+
+    def retention_args(self) -> list[str]:
+        args = []
+        if self.cfg.retention_full:
+            args += ["--repo1-retention-full-type=count", f"--repo1-retention-full={self.cfg.retention_full}"]
+        if self.cfg.retention_diff:
+            args.append(f"--repo1-retention-diff={self.cfg.retention_diff}")
+        return args
+
+    def retention_effective(self) -> dict:
+        """Rétention réellement appliquée : tableau de bord, sinon pgbackrest.conf."""
+        conf = {}
+        try:
+            for line in open(self.cfg.pgbackrest_config, encoding="utf-8"):
+                k, _, v = line.partition("=")
+                conf[k.strip()] = v.strip()
+        except OSError:
+            pass
+        def num(v):
+            return int(v) if str(v).isdigit() else None
+        return {"full": self.cfg.retention_full or num(conf.get("repo1-retention-full")),
+                "diff": self.cfg.retention_diff or num(conf.get("repo1-retention-diff"))}
 
     def check(self) -> Result:
         return self.exec("check", timeout=900)
