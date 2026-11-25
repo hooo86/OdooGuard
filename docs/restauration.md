@@ -333,6 +333,56 @@ cd /mnt/g/OdooGuard && while IFS=$'\t' read -r f n; do [ "$(stat -c %s "$f" 2>/d
 Sans aucun Linux disponible, partager `G:\OdooGuard` depuis un poste Windows, en lecture
 seule, et le monter en CIFS sur le serveur à reconstruire.
 
+### B5. Réinstaller OdooGuard et reprendre les sauvegardes existantes
+
+Cas : la VM OdooGuard est perdue ou réinstallée, mais une copie des dépôts existe (NAS1,
+NAS2 ou disque G:\). Toutes les sauvegardes, avec leur historique et la restauration à un
+instant précis, sont reprises. Il faut **les deux phrases secrètes du pli scellé**.
+
+1. Ubuntu 24.04, mêmes adresse et nom que l'ancienne VM si possible, disque de 1 To pour
+   `/srv/odooguard`, sources d'OdooGuard dans `/root/odooguard-src`.
+
+2. **Avant l'installation**, remettre les deux secrets (sinon l'installation en génère de
+   nouveaux, qui ne savent pas lire les anciennes sauvegardes) :
+
+   ```bash
+   sudo install -d -m 750 /etc/odooguard
+   ```
+   ```bash
+   sudo sh -c 'umask 077; printf "%s" "<restic.pass du pli scellé>" > /etc/odooguard/restic.pass; printf "%s" "<pgbackrest-cipher.pass du pli scellé>" > /etc/odooguard/pgbackrest-cipher.pass'
+   ```
+
+3. Installer OdooGuard normalement (`install/install-odooguard.sh`, puis phases 2 et 3).
+
+4. Monter le NAS (tableau de bord, page NAS) et recopier les dépôts sur le disque local,
+   services de sauvegarde arrêtés :
+
+   ```bash
+   sudo systemctl stop 'odooguard-*.timer' odooguard-walreceiver.service
+   ```
+   ```bash
+   sudo rsync -a --info=progress2 /mnt/odooguard/nas1/odooguard/pgbackrest/ /srv/odooguard/pgbackrest/ && sudo rsync -a --info=progress2 /mnt/odooguard/nas1/odooguard/restic/ /srv/odooguard/restic/ && sudo chown -R odooguard:odooguard /srv/odooguard/pgbackrest /srv/odooguard/restic
+   ```
+
+   Depuis le disque G:\ : brancher le disque sur un poste Windows et copier
+   `G:\OdooGuard\pgbackrest` et `G:\OdooGuard\restic` vers ces mêmes dossiers.
+
+5. Vérifier que les anciennes sauvegardes sont lisibles :
+
+   ```bash
+   sudo odooguard list all
+   ```
+
+6. Nouvelle clé SSH d'OdooGuard : la réautoriser sur server01 (et la VM de test) en
+   relançant `install/install-server01.sh`, puis relancer les services :
+
+   ```bash
+   sudo systemctl start odooguard-walreceiver.service && sudo systemctl start odooguard-backup-db@full.service
+   ```
+
+   La sauvegarde complète relance la chaîne ; la planification est à réactiver dans le
+   tableau de bord.
+
 ### B3. Restauration avec l'ancien format (transition)
 
 Tant que `odoo_backup.sh` tourne en parallèle (2 semaines après la mise en service),
