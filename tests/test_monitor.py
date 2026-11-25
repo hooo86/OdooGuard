@@ -424,3 +424,48 @@ def test_nas_page_suspend_button(web):
     assert job["kind"] == "nas-enable" and json.loads(job["params"]) == {"name": "nas2", "enabled": False}
     notif = ada.get("/notifications").text
     assert 'name="route_nas-nas2_telegram"' in notif
+
+
+# ------------------------------------------------------------------ VM de test
+TESTVM = {"label": "VM de recette", "host": "192.168.8.90", "odoo_url": "http://192.168.8.90:8069",
+          "pg_version": "15", "pg_cluster": "main", "odoo_service": "odoo", "odoo_conf": "/etc/odoo/odoo.conf",
+          "filestore_path": "/var/lib/odoo/.local/share/Odoo/filestore"}
+
+
+def test_testvm_save_and_refuse_production(cfg):
+    from odooguard import config as config_mod
+    with pytest.raises(OdooGuardError, match="production"):
+        settings.validate_testvm(cfg, {**TESTVM, "host": cfg.source.host})
+    with pytest.raises(OdooGuardError):
+        settings.validate_testvm(cfg, {**TESTVM, "odoo_conf": "/etc/odoo.conf; rm -rf /"})
+    res = settings.job_testvm_save(cfg, TESTVM)
+    assert "NOUVELLE ADRESSE" in res["message"] and "ssh-keyscan 192.168.8.90" in res["message"]
+    t = config_mod.load(cfg.path).targets[cfg.restore_test.target]
+    assert (t.label, t.host, t.is_production, t.ssh_key) == ("VM de recette", "192.168.8.90", False,
+                                                             cfg.targets[cfg.restore_test.target].ssh_key)
+
+
+def test_testvm_connection_messages(cfg, monkeypatch):
+    from odooguard.util import CommandError
+    from odooguard import remote
+
+    def failing(self, verb, *a, **k):
+        raise CommandError(["ssh"], 255, "Host key verification failed.")
+    monkeypatch.setattr(remote.Agent, "call", failing)
+    with pytest.raises(OdooGuardError, match="ssh-keyscan"):
+        settings.job_testvm_test(cfg)
+    from odooguard.util import Result
+    monkeypatch.setattr(remote.Agent, "call", lambda self, verb, *a, **k: Result(0, "active\n", "", 0))
+    monkeypatch.setattr(remote.Agent, "call_json", lambda self, verb, *a, **k: {"databases": ["ogtest_1"]})
+    assert "Odoo : active" in settings.job_testvm_test(cfg)["message"]
+
+
+def test_testvm_page(web):
+    client, hist = web
+    ada = client("ada")
+    html = ada.get("/vm-test").text
+    assert 'name="host"' in html and "Tester la connexion" in html
+    tok = re.search(r'name="csrf" value="([^"]+)"', html).group(1)
+    r = ada.post("/vm-test/save", data={"csrf": tok, **TESTVM}, follow_redirects=False)
+    assert r.status_code == 303 and hist.jobs_recent(1)[0]["kind"] == "testvm-save"
+    assert "Tester la connexion" not in client("lea").get("/vm-test").text

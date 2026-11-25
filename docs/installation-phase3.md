@@ -53,8 +53,18 @@ clients, appeler une API externe ou être prise pour la production.
    sudo apt-get install -y postgresql-15
    ```
 
-   Modules additionnels : les copier depuis le miroir d'OdooGuard (`/opt/odoo/custom-addons`
-   par exemple), ou les réinstaller avec `odooguard restore files --path … --push --target testvm --force`.
+   Odoo 17 : **même paquet et même version** que server01 (`dpkg -l odoo` sur server01 ;
+   dépôt dans `/var/lib/odooguard-export/` de server01), puis :
+
+   ```bash
+   sudo apt-get install -y odoo
+   ```
+
+   Modules additionnels du LNHC : sur server01, ils sont **dans le dossier du paquet**
+   (`/usr/lib/python3/dist-packages/odoo/oca_17`, `extra-addons-17`, `ayrade_17`,
+   `ayrade_payroll_17`, `lnhc`). Ils sont réinstallés depuis la sauvegarde d'OdooGuard à
+   l'étape 5 bis, une fois l'agent en place. Reprendre aussi la ligne `addons_path` de
+   server01 dans `/etc/odoo/odoo.conf` de la VM.
 
 3. **Rôle PostgreSQL d'Odoo** :
 
@@ -88,6 +98,21 @@ clients, appeler une API externe ou être prise pour la production.
    filestore. Sur server01, ce paramètre reste à `no` : l'agent refuse alors
    `db-drop-test`.
 
+   Dans le même fichier, autoriser la réinstallation des modules (étape 5 bis) :
+
+   ```bash
+   IMPORT_PATHS="/etc/odoo:odoo:odoo /usr/lib/python3/dist-packages/odoo/oca_17:root:root /usr/lib/python3/dist-packages/odoo/extra-addons-17:root:root /usr/lib/python3/dist-packages/odoo/ayrade_17:root:root /usr/lib/python3/dist-packages/odoo/ayrade_payroll_17:root:root /usr/lib/python3/dist-packages/odoo/lnhc:root:root"
+   ```
+
+5 bis. **Modules du LNHC sur la VM**, depuis OdooGuard (dernière sauvegarde des fichiers) :
+
+   ```bash
+   sudo odooguard restore files --push --target testvm --force --confirm testvm --path /usr/lib/python3/dist-packages/odoo/oca_17 --path /usr/lib/python3/dist-packages/odoo/extra-addons-17 --path /usr/lib/python3/dist-packages/odoo/ayrade_17 --path /usr/lib/python3/dist-packages/odoo/ayrade_payroll_17 --path /usr/lib/python3/dist-packages/odoo/lnhc
+   ```
+
+   À refaire après chaque mise à jour de ces modules sur server01 (le test de
+   restauration échoue sinon sur un module manquant).
+
 6. **Pare-feu de la VM**, nftables. Entrant : SSH et 5432 depuis OdooGuard, 8069 depuis le
    réseau d'administration. Sortant : uniquement OdooGuard et DNS. Pas de SMTP, pas d'Internet.
 
@@ -119,9 +144,9 @@ clients, appeler une API externe ou être prise pour la production.
    sudo systemctl enable nftables
    ```
 
-7. Côté OdooGuard, vérifier la section `[target:testvm]` de `/etc/odooguard/odooguard.conf`
-   (`host`, `pg_version`, `odoo_url = http://192.168.8.82:8069`, `is_production = no`) et
-   l'empreinte SSH :
+7. Côté OdooGuard, **Réglages → VM de test** : nom affiché, adresse, URL d'Odoo, version
+   PostgreSQL (l'adresse de la production y est refusée). Enregistrer l'empreinte SSH de
+   la VM, puis **Tester la connexion** :
 
    ```bash
    sudo -u odooguard sh -c 'ssh-keyscan 192.168.8.82 >> ~/.ssh/known_hosts'

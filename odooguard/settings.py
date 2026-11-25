@@ -465,3 +465,73 @@ def job_nas_enable(cfg: Config, params: dict) -> dict:
     return {"name": name, "enabled": on,
             "message": f"NAS {name} " + ("réactivé : copies et contrôles reprennent" if on else
                                          "suspendu : plus de copie, de contrôle ni d'alerte jusqu'à réactivation")}
+
+
+# ------------------------------------------------------------------ VM de test
+URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]{1,253}(:\d{1,5})?(/[A-Za-z0-9._~/-]*)?$")
+PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]{1,200}$")
+LABEL_RE = re.compile(r"^[^\n\r<>\"]{1,60}$")
+
+
+def validate_testvm(cfg: Config, p: dict) -> dict:
+    v = {k: str(p.get(k, "")).strip() for k in ("label", "host", "odoo_url", "pg_version", "pg_cluster",
+                                                 "odoo_service", "odoo_conf", "filestore_path")}
+    checks = (("label", LABEL_RE, "nom affiché"), ("host", HOST_RE, "adresse (IP ou nom DNS)"),
+              ("odoo_url", URL_RE, "URL d'Odoo (http://adresse:8069)"),
+              ("pg_version", re.compile(r"^\d{2}$"), "version PostgreSQL (ex. 15)"),
+              ("pg_cluster", re.compile(r"^[a-z0-9_]{1,32}$"), "instance PostgreSQL (ex. main)"),
+              ("odoo_service", UNIT_RE, "service Odoo"), ("odoo_conf", PATH_RE, "fichier de configuration d'Odoo"),
+              ("filestore_path", PATH_RE, "dossier filestore"))
+    for key, rx, lib in checks:
+        if not rx.match(v[key]):
+            raise OdooGuardError(f"{lib} invalide : {v[key]!r}", "usage")
+    prod = {cfg.source.host.lower()}
+    if v["host"].lower() in prod or v["host"] in ("127.0.0.1", "localhost"):
+        raise OdooGuardError("cette adresse est celle de la production (ou d'OdooGuard) : la VM de test "
+                             "reçoit des copies neutralisées et des suppressions de bases de test", "usage")
+    return v
+
+
+def job_testvm_save(cfg: Config, params: dict) -> dict:
+    name = cfg.restore_test.target
+    v = validate_testvm(cfg, params)
+    old = cfg.targets.get(name)
+    write_section(cfg.path, f"target:{name}", {
+        "label": v["label"], "host": v["host"],
+        "ssh_user": old.ssh_user if old else "root",
+        "ssh_key": old.ssh_key if old else "/etc/odooguard/ssh/id_agent",
+        "pg_version": v["pg_version"], "pg_cluster": v["pg_cluster"], "odoo_service": v["odoo_service"],
+        "odoo_conf": v["odoo_conf"], "filestore_path": v["filestore_path"], "odoo_url": v["odoo_url"],
+        "is_production": "no"}, comment="VM de test - modifiée depuis le tableau de bord (jamais la production)")
+    changed_host = old is not None and old.host != v["host"]
+    msg = f"VM de test « {v['label']} » ({v['host']}) enregistrée"
+    if changed_host:
+        msg += (f" ; NOUVELLE ADRESSE : enregistrer son empreinte SSH sur OdooGuard "
+                f"(sudo -u odooguard sh -c 'ssh-keyscan {v['host']} >> ~/.ssh/known_hosts') puis « Tester »")
+    return {**v, "message": msg}
+
+
+def job_testvm_test(cfg: Config) -> dict:
+    """Connexion à l'agent de la VM de test : SSH, agent, Odoo, sécurité (ALLOW_TEST_DROP)."""
+    from odooguard.remote import Agent
+    t = cfg.target(cfg.restore_test.target)
+    if t.is_production:
+        raise OdooGuardError("la cible du test de restauration est marquée production : refusé", "usage")
+    try:
+        odoo = Agent(t).call("odoo-status", timeout=60).stdout.strip() or "?"
+    except OdooGuardError as exc:
+        text = str(exc)
+        if "Host key verification failed" in text or "No ED25519 host key" in text or "known_hosts" in text:
+            raise OdooGuardError(f"empreinte SSH de {t.host} inconnue : sur OdooGuard, lancer "
+                                 f"sudo -u odooguard sh -c 'ssh-keyscan {t.host} >> ~/.ssh/known_hosts'",
+                                 "command") from None
+        if "Permission denied" in text:
+            raise OdooGuardError(f"{t.host} refuse la clé d'OdooGuard : installer l'agent sur la VM "
+                                 "(install/install-server01.sh avec OG_IP=<adresse d'OdooGuard>)", "command") from None
+        raise OdooGuardError(f"VM de test injoignable : {text[-400:]}", "command") from None
+    try:
+        dbs = Agent(t).call_json("db-list-test", timeout=60).get("databases", [])
+        drop = f"suppression des bases de test autorisée ({len(dbs)} base(s) ogtest_*)"
+    except OdooGuardError:
+        drop = "ATTENTION : ALLOW_TEST_DROP=yes absent de /etc/odooguard-agent.conf sur la VM"
+    return {"odoo": odoo, "message": f"{t.label or t.name} ({t.host}) joignable ; Odoo : {odoo} ; {drop}"}

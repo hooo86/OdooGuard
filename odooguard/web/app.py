@@ -338,9 +338,10 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         return val
 
     def targets() -> list[dict]:
-        out = [{"name": "odoo", "label": f"server01 - PRODUCTION ({cfg.source.host})", "prod": True}]
-        out += [{"name": n, "label": f"{n} ({t.host})", "prod": t.is_production}
-                for n, t in cfg.targets.items()]
+        c = fresh_cfg()
+        out = [{"name": "odoo", "label": f"server01 - PRODUCTION ({c.source.host})", "prod": True}]
+        out += [{"name": n, "label": f"{t.label or n} ({t.host})", "prod": t.is_production}
+                for n, t in c.targets.items()]
         return out
 
     def form_params(form: dict) -> dict:
@@ -803,6 +804,51 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
             return page(request, "bases.html", user=user, current=c.databases, found=found,
                         found_err=found_err, error=str(exc))
         return queue(request, user, role, "databases-save", {"databases": dbs}, target="bases")
+
+    # ---- VM de test
+    TESTVM_FIELDS = ("label", "host", "odoo_url", "pg_version", "pg_cluster", "odoo_service", "odoo_conf",
+                     "filestore_path")
+
+    def testvm_values(c: Config) -> dict:
+        t = c.targets.get(c.restore_test.target)
+        if t is None:
+            return {"label": "VM de test", "host": "", "odoo_url": "", "pg_version": c.source.pg_version,
+                    "pg_cluster": "main", "odoo_service": "odoo", "odoo_conf": "/etc/odoo/odoo.conf",
+                    "filestore_path": c.source.filestore_path}
+        return {"label": t.label or "VM de test", **{k: getattr(t, k) for k in TESTVM_FIELDS[1:]}}
+
+    @app.get("/vm-test", response_class=HTMLResponse)
+    def vm_test(request: Request):
+        user, role, err = require(request, "lecteur")
+        if err:
+            return err
+        c = fresh_cfg()
+        return page(request, "vm_test.html", user=user, v=testvm_values(c), target_name=c.restore_test.target,
+                    prod_host=c.source.host, error=None)
+
+    @app.post("/vm-test/save")
+    async def vm_test_save(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        from odooguard import settings
+        c = fresh_cfg()
+        params = {k: form.get(k, "") for k in TESTVM_FIELDS}
+        try:
+            settings.validate_testvm(c, params)
+        except OdooGuardError as exc:
+            return page(request, "vm_test.html", user=user, v=params, target_name=c.restore_test.target,
+                        prod_host=c.source.host, error=str(exc))
+        return queue(request, user, role, "testvm-save", params, target="vm-test")
+
+    @app.post("/vm-test/test")
+    async def vm_test_test(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        return queue(request, user, role, "testvm-test", {}, target="vm-test")
 
     # ---- surveillance (seuils, services, sécurité)
     MON_FIELDS = ("disk_warn_pct", "disk_crit_pct", "services_local", "failed_logins_warn",

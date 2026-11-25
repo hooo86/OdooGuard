@@ -33,7 +33,8 @@ log = logging.getLogger("odooguard")
 ROLES = ("lecteur", "operateur", "admin")
 
 ADMIN_JOBS = ("schedule", "notify-save", "notify-test", "telegram-discover", "user-save", "user-delete",
-              "monitoring-save", "databases-save", "nas-enable")
+              "monitoring-save", "databases-save", "nas-enable",
+              "testvm-save", "testvm-test")
 
 # Sauvegardes lançables depuis le tableau de bord -> service systemd (le même que
 # celui des planifications : mêmes verrous, alertes OnFailure, journaux, progression).
@@ -167,6 +168,10 @@ def run_job(cfg: Config, history: History, job: dict) -> None:
                 result = settings.job_notify_test(fresh, history, str(params.get("channel") or ""))
             elif kind == "telegram-discover":
                 result = settings.job_telegram_discover(fresh, params)
+            elif kind == "testvm-save":
+                result = settings.job_testvm_save(fresh, params)
+            elif kind == "testvm-test":
+                result = settings.job_testvm_test(fresh)
             elif kind == "nas-enable":
                 result = settings.job_nas_enable(fresh, params)
             elif kind == "databases-save":
@@ -178,7 +183,7 @@ def run_job(cfg: Config, history: History, job: dict) -> None:
             else:
                 result = settings.job_user_delete(fresh, params, job["user"])
             log.info("%s", result.get("message", ""))
-            if kind not in ("notify-test", "telegram-discover"):
+            if kind not in ("notify-test", "telegram-discover", "testvm-test"):
                 safe = {k: v for k, v in params.items() if not k.endswith("_token") and k != "confirm"}
                 auditor.record(kind, str(params.get("timer") or params.get("name") or "notifications"),
                                "success", **safe)

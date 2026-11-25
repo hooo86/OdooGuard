@@ -69,6 +69,7 @@ class Target:
     odoo_url: str = ""
     filestore_path: str = "/var/lib/odoo/.local/share/Odoo/filestore"
     is_production: bool = False
+    label: str = ""  # nom affiché (ex. « VM de test »)
 
     def __post_init__(self) -> None:
         if not self.pg_datadir:
@@ -294,6 +295,7 @@ def _target_from_section(r: _Reader, section: str, name: str) -> Target:
             section, "filestore_path", "/var/lib/odoo/.local/share/Odoo/filestore"
         ),
         is_production=r.bool(section, "is_production", False),
+        label=r.get(section, "label", "") or "",
     )
     return t
 
