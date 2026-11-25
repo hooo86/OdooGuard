@@ -171,11 +171,27 @@ def pull_mirror(cfg: Config, progress=None) -> dict:
         for ex in cfg.rsync_excludes:
             cmd.append(f"--exclude={ex}")
         cmd += [agent.rsync_source(src.rstrip("/") + "/"), dest.rstrip("/") + "/"]
-        res = run_streaming(cmd, rsync_progress_cb(progress), env=RSYNC_ENV, ok_codes=RSYNC_OK)
+        try:
+            res = run_streaming(cmd, rsync_progress_cb(progress), env=RSYNC_ENV, ok_codes=RSYNC_OK)
+        except OdooGuardError as exc:
+            # Une source en échec (chemin absent...) n'empêche pas de sauvegarder les autres :
+            # l'appelant crée quand même l'instantané, puis signale l'échec.
+            text = str(exc)
+            hint = ""
+            if "(23)" in text and "Number of files: 0" in text:
+                hint = (" : chemin introuvable ou illisible sur le serveur Odoo - vérifier [odoo] "
+                        "file_sources (chemin des modules : addons_path de odoo.conf)")
+            log.error("source %s en échec%s", src, hint or f" : {text[:300]}")
+            stats[src] = {"error": (hint.lstrip(" :") or text[:300])}
+            continue
         stats[src] = _rsync_stats(res.stdout)
         if res.returncode == 24:
             log.info("rsync %s : fichiers disparus pendant la copie (normal)", src)
     return stats
+
+
+def failed_sources(stats: dict) -> dict:
+    return {src: st["error"] for src, st in stats.items() if isinstance(st, dict) and st.get("error")}
 
 
 def _rsync_stats(out: str) -> dict:

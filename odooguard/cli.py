@@ -134,6 +134,13 @@ def cmd_backup(ctx: Ctx) -> int:
                 prog.update(phase="2/2 instantané restic (dédupliqué, chiffré)")
                 summ = Restic(cfg).backup(cfg.mirror_dir, host=cfg.source.host, tags=["files"],
                                           progress=prog)
+            from odooguard.files import failed_sources
+            failed = failed_sources(stats)
+            if failed:
+                ok = [s for s in stats if s not in failed]
+                raise OdooGuardError(
+                    f"instantané {summ['snapshot_id'][:8]} créé pour {', '.join(ok) or 'aucune source'} ; "
+                    "EN ÉCHEC : " + " ; ".join(f"{s} ({e})" for s, e in failed.items()), "source")
             return {"label": summ["snapshot_id"][:8], "size": summ.get("total_bytes_processed"),
                     "added": summ.get("data_added"), "rsync": stats}
         with file_lock(cfg.lock_dir, "files", wait=a.wait):

@@ -49,3 +49,27 @@ Total transferred file size: 1,024 bytes
     assert s["number of files"] == 1234
     assert s["number of regular files transferred"] == 12
     assert s["total file size"] == 35123456
+
+
+def test_pull_mirror_continues_after_missing_source(cfg, monkeypatch):
+    """Une source absente (chemin des modules erroné) n'empêche pas les autres."""
+    from odooguard import files
+    from odooguard.util import CommandError, Result
+    cfg.file_sources = ["/var/lib/odoo/filestore", "/opt/odoo/custom-addons", "/etc/odoo"]
+    seen = []
+
+    def fake(cmd, cb, **kw):
+        src = cmd[-2]
+        seen.append(src)
+        if "custom-addons" in src:
+            raise CommandError(cmd, 23, "rsync: [Receiver] write error: Broken pipe (32)\n"
+                                        "Number of files: 0\nTotal file size: 0 bytes")
+        return Result(0, "Number of files: 3\nTotal file size: 1,024 bytes\n", "", 0)
+    monkeypatch.setattr(files, "run_streaming", fake)
+    monkeypatch.setattr(files.Agent, "rsync_source", lambda self, p: "root@h:" + p)
+    monkeypatch.setattr(files.Agent, "rsync_ssh", lambda self: "ssh")
+    stats = files.pull_mirror(cfg)
+    assert len(seen) == 3
+    failed = files.failed_sources(stats)
+    assert list(failed) == ["/opt/odoo/custom-addons"] and "addons_path" in failed["/opt/odoo/custom-addons"]
+    assert stats["/etc/odoo"]["total file size"] == 1024
