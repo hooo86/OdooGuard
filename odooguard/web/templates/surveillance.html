@@ -5,6 +5,20 @@
 {% block content %}
 {% set f = form or {} %}
 {% if error %}<p class="banner banner-critical" role="alert">{{ error }}</p>{% endif %}
+{% if externals %}
+<form method="post" action="/surveillance/externes" class="card wizard">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <fieldset {% if role != 'admin' %}disabled{% endif %}>
+    <legend>Rapports envoyés par d'autres machines</legend>
+    {% for name, e in externals.items() %}
+    <label class="radio"><input type="checkbox" name="ext" value="{{ name }}" {% if e.enabled %}checked{% endif %}>
+      Contrôler « {{ e.label }} » <span class="small muted">(alerte sans rapport réussi depuis {{ fmt_age(e.max_age) }})</span></label>
+    {% endfor %}
+    <p class="small muted">Décocher un contrôle qui n'est pas utilisé (par exemple la copie hors ligne faite à la main) : il disparaît de l'état et son alerte est close.</p>
+  </fieldset>
+  {% if role == 'admin' %}<div class="actions"><span></span><button type="submit" class="primary">Enregistrer</button></div>{% endif %}
+</form>
+{% endif %}
 <form method="post" action="/surveillance/seuils" class="card wizard" autocomplete="off">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <fieldset {% if role != 'admin' %}disabled{% endif %}>

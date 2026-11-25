@@ -895,7 +895,7 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
             return err
         c = fresh_cfg()
         return page(request, "surveillance.html", user=user, m=c.monitoring, form=None, error=None,
-                    thresholds=threshold_rows(c), tform=None)
+                    thresholds=threshold_rows(c), tform=None, externals=c.externals)
 
     @app.post("/surveillance/save")
     async def surveillance_save(request: Request):
@@ -912,7 +912,7 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         except OdooGuardError as exc:
             c = fresh_cfg()
             return page(request, "surveillance.html", user=user, m=c.monitoring, form=form,
-                        error=str(exc), thresholds=threshold_rows(c), tform=None)
+                        error=str(exc), thresholds=threshold_rows(c), tform=None, externals=c.externals)
         v["services_local"] = ", ".join(v["services_local"])
         return queue(request, user, role, "monitoring-save", v, target="surveillance")
 
@@ -936,6 +936,15 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
                          "plan": plan})
         return rows
 
+    @app.post("/surveillance/externes")
+    async def surveillance_externes(request: Request):
+        form = await request.form()
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        names = [n for n in form.getlist("ext") if n in fresh_cfg().externals]
+        return queue(request, user, role, "externals-save", {"enabled": names}, target="externes")
+
     @app.post("/surveillance/seuils")
     async def surveillance_seuils(request: Request):
         form = dict(await request.form())
@@ -949,7 +958,7 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         except OdooGuardError as exc:
             c = fresh_cfg()
             return page(request, "surveillance.html", user=user, m=c.monitoring, form=None, error=str(exc),
-                        thresholds=threshold_rows(c), tform=form)
+                        thresholds=threshold_rows(c), tform=form, externals=c.externals)
         return queue(request, user, role, "thresholds-save", params, target="seuils")
 
     # ---- sécurité Odoo (lecture)

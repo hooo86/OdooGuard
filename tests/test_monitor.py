@@ -533,3 +533,19 @@ def test_retention_page(web):
                                           "keep_hourly": "48", "keep_daily": "14", "keep_weekly": "8",
                                           "keep_monthly": "12"}, follow_redirects=False)
     assert r.status_code == 303 and hist.jobs_recent(1)[0]["kind"] == "retention-save"
+
+
+def test_externals_toggle(cfg, web):
+    from odooguard import config as config_mod
+    settings.job_externals_save(cfg, {"enabled": ["veeam"]})
+    ext = config_mod.load(cfg.path).externals
+    assert ext["veeam"].enabled and not ext["offline"].enabled
+    with pytest.raises(OdooGuardError):
+        settings.job_externals_save(cfg, {"enabled": ["inconnu"]})
+    client, hist = web
+    ada = client("ada")
+    html = ada.get("/surveillance").text
+    assert 'value="offline"' in html
+    tok = re.search(r'name="csrf" value="([^"]+)"', html).group(1)
+    r = ada.post("/surveillance/externes", data={"csrf": tok, "ext": ["veeam"]}, follow_redirects=False)
+    assert r.status_code == 303 and json.loads(hist.jobs_recent(1)[0]["params"]) == {"enabled": ["veeam"]}

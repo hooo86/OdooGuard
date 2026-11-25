@@ -35,7 +35,7 @@ ROLES = ("lecteur", "operateur", "admin")
 ADMIN_JOBS = ("schedule", "notify-save", "notify-test", "telegram-discover", "user-save", "user-delete",
               "monitoring-save", "databases-save", "nas-enable",
               "testvm-save", "testvm-test", "thresholds-save",
-              "retention-save")
+              "retention-save", "externals-save")
 
 # Sauvegardes lançables depuis le tableau de bord -> service systemd (le même que
 # celui des planifications : mêmes verrous, alertes OnFailure, journaux, progression).
@@ -169,6 +169,8 @@ def run_job(cfg: Config, history: History, job: dict) -> None:
                 result = settings.job_notify_test(fresh, history, str(params.get("channel") or ""))
             elif kind == "telegram-discover":
                 result = settings.job_telegram_discover(fresh, params)
+            elif kind == "externals-save":
+                result = settings.job_externals_save(fresh, params)
             elif kind == "retention-save":
                 result = settings.job_retention_save(fresh, params)
             elif kind == "thresholds-save":

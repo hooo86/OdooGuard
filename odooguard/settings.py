@@ -603,3 +603,17 @@ def job_retention_save(cfg: Config, params: dict) -> dict:
                              f"{v['retention_diff']} différentielle(s) ; fichiers {v['keep_hourly']} h / "
                              f"{v['keep_daily']} j / {v['keep_weekly']} sem. / {v['keep_monthly']} mois. "
                              "Appliquée à la prochaine sauvegarde de la base et à la prochaine maintenance.")}
+
+
+def job_externals_save(cfg: Config, params: dict) -> dict:
+    """Active ou désactive le contrôle des rapports extérieurs (Veeam, copie hors ligne G:\\)."""
+    wanted = set(params.get("enabled") or [])
+    unknown = wanted - set(cfg.externals)
+    if unknown:
+        raise OdooGuardError(f"composant inconnu : {', '.join(sorted(unknown))}", "usage")
+    states = []
+    for name, ext in cfg.externals.items():
+        on = name in wanted
+        set_option(cfg.path, f"external:{name}", "enabled", "yes" if on else "no")
+        states.append(f"{ext.label} : {'contrôlé' if on else 'non contrôlé'}")
+    return {"enabled": sorted(wanted), "message": " ; ".join(states)}
