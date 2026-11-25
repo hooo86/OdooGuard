@@ -18,7 +18,7 @@
   <fieldset {% if role != 'admin' %}disabled{% endif %}>
     <legend>Services</legend>
     <label>Services OdooGuard surveillés (séparés par des virgules) <input name="services_local" value="{{ f.services_local or m.services_local|join(', ') }}"></label>
-    <p class="small muted">Serveur Odoo : Odoo, chaque instance PostgreSQL, nginx ou apache2, cron et ssh sont surveillés automatiquement s'ils existent. Pour en ajouter : variable <code>MONITOR_SERVICES="nom1 nom2"</code> dans <code>/etc/odooguard-agent.conf</code> sur le serveur Odoo. Un service arrêté déclenche une alerte critique.</p>
+    <p class="small muted">Serveur Odoo : Odoo, chaque instance PostgreSQL, nginx, cron et ssh sont surveillés automatiquement s'ils existent. Pour en ajouter : variable <code>MONITOR_SERVICES="nom1 nom2"</code> dans <code>/etc/odooguard-agent.conf</code> sur le serveur Odoo. Un service arrêté déclenche une alerte critique.</p>
   </fieldset>
   <fieldset {% if role != 'admin' %}disabled{% endif %}>
     <legend><label class="radio"><input type="checkbox" name="security" {% if (form and f.security) or (not form and m.security) %}checked{% endif %}> Sécurité d'Odoo</label></legend>

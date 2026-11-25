@@ -279,15 +279,45 @@ def test_surveillance_and_timezone_forms(web):
     assert 'name="channel" value="telegram"' in notif
 
 
-def test_spare_web_server_ignored():
+def test_apache2_not_watched():
     svcs = [{"unit": "nginx.service", "active": "active"}, {"unit": "apache2.service", "active": "inactive"},
             {"unit": "odoo.service", "active": "inactive"}]
-    kept = [s["unit"] for s in monitor.ignore_spare_web_server(svcs)]
-    assert kept == ["nginx.service", "odoo.service"]       # Odoo arrêté reste signalé
-    # aucun serveur web actif : les deux restent visibles
-    both_down = [{"unit": "nginx.service", "active": "failed"}, {"unit": "apache2.service", "active": "inactive"}]
-    assert len(monitor.ignore_spare_web_server(both_down)) == 2
-    # apache2 activé au démarrage mais arrêté : c'est une panne, on le garde
-    enabled = [{"unit": "nginx.service", "active": "active"},
-               {"unit": "apache2.service", "active": "inactive", "enabled": "enabled"}]
-    assert len(monitor.ignore_spare_web_server(enabled)) == 2
+    assert [s["unit"] for s in monitor.drop_unwatched(svcs)] == ["nginx.service", "odoo.service"]
+
+
+def test_set_option_keeps_section(cfg):
+    from odooguard import config as config_mod
+    before = config_mod.load(cfg.path)
+    settings.job_databases_save(cfg, {"databases": ["LNHC_Prod_2025"]})
+    after = config_mod.load(cfg.path)
+    assert after.databases == ["LNHC_Prod_2025"]
+    assert after.file_sources == before.file_sources and after.source.host == before.source.host
+    with pytest.raises(OdooGuardError):
+        settings.validate_databases(["postgres"])
+    with pytest.raises(OdooGuardError):
+        settings.validate_databases(["x; drop"])
+
+
+def test_database_list_parses_info(cfg, monkeypatch):
+    from odooguard import pg
+    from odooguard.util import Result
+    data = [{"name": cfg.stanza, "backup": [{"label": "L", "database-ref": [
+        {"name": "postgres", "oid": 5}, {"name": "LNHC_Prod_2025", "oid": 16384},
+        {"name": "LNHC_08_07_26", "oid": 16385}, {"name": "template1", "oid": 1}]}]}]
+    monkeypatch.setattr(pg.PgBackRest, "exec", lambda self, *a, **k: Result(0, json.dumps(data), "", 0))
+    assert pg.PgBackRest(cfg).database_list("L") == ["LNHC_08_07_26", "LNHC_Prod_2025"]
+
+
+def test_bases_page(web, monkeypatch):
+    client, hist = web
+    from odooguard import pg
+    monkeypatch.setattr(pg.PgBackRest, "database_list", lambda self, label=None: ["LNHC_Prod_2025", "Autre"])
+    ada = client("ada")
+    html = ada.get("/bases").text
+    assert 'value="Autre"' in html and "toute l'instance PostgreSQL" in html
+    tok = re.search(r'name="csrf" value="([^"]+)"', html).group(1)
+    r = ada.post("/bases/save", data={"csrf": tok, "db": ["LNHC_Prod_2025", "Autre"], "other": ""},
+                 follow_redirects=False)
+    assert r.status_code == 303
+    job = hist.jobs_recent(1)[0]
+    assert job["kind"] == "databases-save" and json.loads(job["params"])["databases"] == ["LNHC_Prod_2025", "Autre"]

@@ -111,6 +111,40 @@ def write_section(cfg_path: str, header: str, values: dict | None, comment: str 
         new = lines + (["\n"] if lines and lines[-1].strip() else []) + block
     else:
         new = lines[:start] + block + lines[end:]
+    _commit(cfg_path, lines, new)
+
+
+def set_option(cfg_path: str, header: str, key: str, value: str) -> None:
+    """Change UNE clé d'une section existante, sans toucher au reste de la section."""
+    if "\n" in str(value):
+        raise OdooGuardError(f"valeur invalide pour {key}", "usage")
+    with open(cfg_path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines(keepends=True)
+    start = end = None
+    for i, line in enumerate(lines):
+        m = SECTION_RE.match(line)
+        if m and m.group(1).strip() == header:
+            start = i
+        elif m and start is not None and end is None:
+            end = i
+    if start is None:
+        raise OdooGuardError(f"section [{header}] absente de la configuration", "config")
+    end = len(lines) if end is None else end
+    key_re = re.compile(rf"^\s*{re.escape(key)}\s*[=:]")
+    new_line = f"{key} = {value}\n"
+    for i in range(start + 1, end):
+        if key_re.match(lines[i]):
+            j = i + 1  # lignes de continuation (indentées) de l'ancienne valeur
+            while j < end and lines[j][:1] in (" ", "\t") and lines[j].strip():
+                j += 1
+            new = lines[:i] + [new_line] + lines[j:]
+            break
+    else:
+        new = lines[:start + 1] + [new_line] + lines[start + 1:]
+    _commit(cfg_path, lines, new)
+
+
+def _commit(cfg_path: str, lines: list[str], new: list[str]) -> None:
     from odooguard import config as config_mod
     try:
         config_mod.load(cfg_path, strict_perms=False)
@@ -383,3 +417,31 @@ def job_monitoring_save(cfg: Config, params: dict) -> dict:
         comment="Surveillance - modifié depuis le tableau de bord")
     return {**v, "message": f"surveillance enregistrée (disques : {v['disk_warn_pct']:g} % / "
                             f"{v['disk_crit_pct']:g} %) ; prise en compte au prochain relevé (≤ 5 min)"}
+
+
+# ------------------------------------------------------------------ bases protégées
+DB_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}$")
+
+
+def validate_databases(names) -> list[str]:
+    dbs = []
+    for n in names if isinstance(names, list) else _split(names):
+        n = str(n).strip()
+        if not n:
+            continue
+        if not DB_RE.match(n) or n in ("postgres", "template0", "template1"):
+            raise OdooGuardError(f"nom de base invalide : {n}", "usage")
+        if n not in dbs:
+            dbs.append(n)
+    if not 1 <= len(dbs) <= 20:
+        raise OdooGuardError("choisir de 1 à 20 bases", "usage")
+    return dbs
+
+
+def job_databases_save(cfg: Config, params: dict) -> dict:
+    dbs = validate_databases(params.get("databases") or [])
+    before = list(cfg.databases)
+    set_option(cfg.path, "odoo", "databases", ", ".join(dbs))
+    return {"databases": dbs, "before": before,
+            "message": "bases Odoo suivies : " + ", ".join(dbs) + (f" (avant : {', '.join(before)})"
+                                                               if before != dbs else "")}

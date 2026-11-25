@@ -123,6 +123,23 @@ class PgBackRest:
         res = self.exec(*args, "info", timeout=300)
         return parse_info(res.stdout, self.cfg.stanza)
 
+    def database_list(self, label: str | None = None) -> list[str]:
+        """Bases contenues dans une sauvegarde (la dernière par défaut), hors bases système."""
+        if not label:
+            last = self.info().last()
+            if not last:
+                return []
+            label = last.label
+        res = self.exec("--output=json", f"--set={label}", "info", timeout=300)
+        names = []
+        for entry in json.loads(res.stdout):
+            for b in entry.get("backup", []):
+                for ref in b.get("database-ref") or []:
+                    name = ref.get("name") if isinstance(ref, dict) else None
+                    if name and name not in ("postgres", "template0", "template1") and name not in names:
+                        names.append(name)
+        return sorted(names)
+
     def backup_progress(self) -> dict | None:
         """Progression de la sauvegarde en cours (verrou « backup » de pgBackRest).
 

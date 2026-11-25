@@ -26,7 +26,8 @@
 #   db-report NOM                  comptages de contrôle + lisibilité des pièces jointes (JSON)
 #   odoo-start | odoo-stop | odoo-status
 #   monitor CURSEUR BASE...        surveillance, lecture seule : disques, services,
-#                                  connexions Odoo (journal), comptes Odoo (JSON)
+#                                  connexions Odoo (journal), comptes Odoo (JSON) ;
+#                                  services : Odoo, PostgreSQL, nginx, cron, ssh + MONITOR_SERVICES
 #   pg-restore-cluster VER CLUSTER STANZA HORODATAGE|latest
 #   create-slot VER CLUSTER        (re)crée le slot de réplication « odooguard »
 #   db-list-test                   bases de test « ogtest_* » (JSON)          [VM de test]
@@ -240,12 +241,12 @@ def show(unit):
                         "Id,LoadState,ActiveState,SubState,ActiveEnterTimestamp,NRestarts,Description,UnitFileState"],
                        capture_output=True, text=True, timeout=20)
     return dict(l.split("=", 1) for l in r.stdout.splitlines() if "=" in l)
-OPTIONAL = ("nginx.service", "apache2.service", "cron.service", "ssh.service")
+OPTIONAL = ("nginx.service", "cron.service", "ssh.service")
 units = [odoo_service + ".service"]
 r = subprocess.run(["systemctl", "list-units", "--all", "--plain", "--no-legend", "postgresql@*.service"],
                    capture_output=True, text=True, timeout=20)
 units += [l.split()[0] for l in r.stdout.splitlines() if l.strip()]
-for u in ("nginx.service", "apache2.service", "cron.service", "ssh.service"):
+for u in ("nginx.service", "cron.service", "ssh.service"):
     units.append(u)
 units += [u if "." in u else u + ".service" for u in extra_services.split()]
 services, done = [], set()
@@ -257,7 +258,7 @@ for u in units:
     if s.get("LoadState") != "loaded" and u not in (odoo_service + ".service",) and u not in extra_services.split():
         continue  # service facultatif absent de ce serveur
     if u in OPTIONAL and s.get("ActiveState") != "active" and s.get("UnitFileState") != "enabled":
-        continue  # installé mais volontairement désactivé (ex. apache2 quand nginx sert Odoo)
+        continue  # installé mais volontairement désactivé
     services.append({"unit": u, "description": s.get("Description", ""), "load": s.get("LoadState"),
                      "active": s.get("ActiveState"), "sub": s.get("SubState"),
                      "since": s.get("ActiveEnterTimestamp", ""), "restarts": s.get("NRestarts"),

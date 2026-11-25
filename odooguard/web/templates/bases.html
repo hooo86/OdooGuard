@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Bases Odoo{% endblock %}
+{% block page_title %}Bases Odoo suivies{% endblock %}
+{% block page_subtitle %}Les bases proposées à la restauration, vérifiées par le test hebdomadaire et surveillées (connexions, comptes).{% endblock %}
+{% block content %}
+{% if error %}<p class="banner banner-critical" role="alert">{{ error }}</p>{% endif %}
+<p class="banner banner-info">pgBackRest sauvegarde <strong>toute l'instance PostgreSQL</strong> de server01, donc
+<strong>toutes</strong> ses bases à chaque fois : une base ne peut pas être exclue de la sauvegarde. Ce réglage choisit
+les bases qu'OdooGuard <strong>suit</strong> : restauration depuis le tableau de bord, test de restauration, surveillance
+de la sécurité.</p>
+<form method="post" action="/bases/save" class="card wizard">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <fieldset {% if role != 'admin' %}disabled{% endif %}>
+    <legend>Bases présentes dans la dernière sauvegarde</legend>
+    {% set listed = (found + current)|unique|list %}
+    {% for db in listed %}
+    <label class="radio"><input type="checkbox" name="db" value="{{ db }}" {% if db in current %}checked{% endif %}>
+      <span class="mono">{{ db }}</span>{% if db not in found and found %} <span class="small muted">(absente de la dernière sauvegarde)</span>{% endif %}</label>
+    {% endfor %}
+    {% if found_err %}<p class="small muted">Liste de la dernière sauvegarde indisponible : {{ found_err }}</p>{% endif %}
+    <label>Autre base (nom exact, séparées par des virgules) <input name="other" value=""></label>
+  </fieldset>
+  {% if role == 'admin' %}<div class="actions"><a href="/reglages">← Réglages</a><button type="submit" class="primary">Enregistrer</button></div>
+  {% else %}<p class="small muted">Modification réservée au rôle admin.</p>{% endif %}
+</form>
+{% endblock %}

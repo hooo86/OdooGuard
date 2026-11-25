@@ -747,6 +747,41 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
             params["token_token"] = settings.stash_secret(cfg, form["telegram_token"].strip())
         return queue(request, user, role, "telegram-discover", params, target="telegram")
 
+    # ---- bases Odoo suivies
+    def known_databases(c: Config) -> tuple[list[str], str | None]:
+        from odooguard.pg import PgBackRest
+        try:
+            return PgBackRest(c).database_list(), None
+        except Exception as exc:  # noqa: BLE001
+            return [], str(exc)[:300]
+
+    @app.get("/bases", response_class=HTMLResponse)
+    def bases(request: Request):
+        user, role, err = require(request, "lecteur")
+        if err:
+            return err
+        c = fresh_cfg()
+        found, found_err = known_databases(c)
+        return page(request, "bases.html", user=user, current=c.databases, found=found,
+                    found_err=found_err, error=None)
+
+    @app.post("/bases/save")
+    async def bases_save(request: Request):
+        form = await request.form()
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        from odooguard import settings
+        names = list(form.getlist("db")) + settings._split(form.get("other", ""))
+        try:
+            dbs = settings.validate_databases(names)
+        except OdooGuardError as exc:
+            c = fresh_cfg()
+            found, found_err = known_databases(c)
+            return page(request, "bases.html", user=user, current=c.databases, found=found,
+                        found_err=found_err, error=str(exc))
+        return queue(request, user, role, "databases-save", {"databases": dbs}, target="bases")
+
     # ---- surveillance (seuils, services, sécurité)
     MON_FIELDS = ("disk_warn_pct", "disk_crit_pct", "services_local", "failed_logins_warn",
                   "failed_logins_window", "keep_days")

@@ -12,5 +12,5 @@ RECOVERY_TIMEOUT=21600
 # VM de test UNIQUEMENT : autorise la suppression des bases ogtest_* (tests de restauration)
 ALLOW_TEST_DROP=no
 # Surveillance (verbe « monitor », lecture seule) : services surveillés EN PLUS
-# d'Odoo, des instances PostgreSQL, de nginx/apache2, cron et ssh. Ex. "redis-server wkhtmltopdf"
+# d'Odoo, des instances PostgreSQL, de nginx, cron et ssh. Ex. "redis-server wkhtmltopdf"
 MONITOR_SERVICES=""

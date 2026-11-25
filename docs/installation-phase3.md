@@ -291,7 +291,7 @@ rafale (nouveau, rappel, résolu) :
 - **Stockage** (encart du tableau de bord) : OdooGuard (système, dépôts), serveur Odoo
   (système, PostgreSQL, filestore, journaux), chaque NAS monté avec la place occupée par
   OdooGuard. Alerte au-delà des seuils réglés dans « Surveillance » (80 % / 90 % par défaut).
-- **Services** : sur le serveur Odoo, Odoo, chaque instance PostgreSQL, nginx ou apache2,
+- **Services** : sur le serveur Odoo, Odoo, chaque instance PostgreSQL, nginx,
   cron et ssh (s'ils existent), plus `MONITOR_SERVICES` de `/etc/odooguard-agent.conf` ;
   sur OdooGuard, réception WAL, tableau de bord et travaux. Un service arrêté est critique.
 - **Sécurité Odoo** (menu du même nom) : connexions échouées (date, base, identifiant
