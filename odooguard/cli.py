@@ -186,7 +186,16 @@ def cmd_backup(ctx: Ctx) -> int:
         names = [a.dest] if a.dest else [d.name for d in cfg.destinations.values() if d.enabled]
         failures = 0
         for name in names:
-            dest = cfg.destinations.get(name)
+            # Configuration relue avant chaque NAS : une copie longue (plusieurs heures) ne doit
+            # pas tenter un NAS suspendu ou retiré depuis son démarrage.
+            try:
+                current = config_mod.load(cfg.path).destinations.get(name)
+            except config_mod.ConfigError:
+                current = cfg.destinations.get(name)
+            if not a.dest and (current is None or not current.enabled):
+                log.info("copie vers %s ignorée : NAS suspendu ou retiré depuis le début de la copie", name)
+                continue
+            dest = current or cfg.destinations.get(name)
             if not dest:
                 raise OdooGuardError(f"destination inconnue : {name}", "usage")
 
@@ -419,8 +428,8 @@ def cmd_maintenance(ctx: Ctx) -> int:
 
 
 # Lignes de journal sans intérêt pour un humain (sudo, PAM, audit JSON, cycle de vie systemd)
-_NOISE = re.compile(r"pam_unix\(|COMMAND=|^\{\"ts\"|^(Started|Starting|Stopping|Stopped) |"
-                    r"Triggering OnFailure|Consumed .* CPU time|Main process exited|Failed with result|"
+_NOISE = re.compile(r"pam_unix\(|COMMAND=|^\{\"ts\"|^(Started|Starting|Stopping|Stopped|Failed to start) |"
+                    r"^\[(CRITIQUE|AVERTISSEMENT|OK)\] |Triggering OnFailure|Consumed .* CPU time|Main process exited|Failed with result|"
                     r"Deactivated successfully|Scheduled restart job")
 _STAMP = re.compile(r"^\d{4}-\d\d-\d\d (\d\d:\d\d:\d\d),\d+ (INFO|WARNING|ERROR|DEBUG) ")
 
@@ -434,7 +443,14 @@ def summarize_unit_journal(text: str, max_lines: int = 8) -> tuple[str, list[str
             continue
         line = _STAMP.sub(lambda m: f"{m.group(1)} {'' if m.group(2) == 'INFO' else m.group(2) + ' '}", line)
         useful.append(line[:300])
-    errors = [l for l in useful if re.search(r"ERREUR|ERROR|échec|Traceback|Error|refus|impossible", l)]
+    seen, dedup = set(), []
+    for l in useful:
+        key = re.sub(r"^\d\d:\d\d:\d\d (ERROR |WARNING )?", "", l)
+        if key not in seen:
+            seen.add(key)
+            dedup.append(l)
+    useful = dedup
+    errors = [l for l in useful if re.search(r"ERREUR|ERROR|échec|ÉCHEC|Traceback|Error|refus|impossible", l)]
     cause = errors[-1] if errors else (useful[-1] if useful else "aucune ligne explicite dans le journal")
     return cause, useful[-max_lines:]
 
@@ -442,7 +458,12 @@ def summarize_unit_journal(text: str, max_lines: int = 8) -> tuple[str, list[str
 def cmd_notify_failure(ctx: Ctx) -> int:
     """Appelé par OnFailure= des unités systemd : alerte courte avec la cause probable."""
     unit = ctx.args.unit
-    res = run(["journalctl", "-u", unit, "-n", "60", "--no-pager", "-o", "cat"], check=False)
+    # Seulement l'exécution qui vient d'échouer (pas les précédentes)
+    inv = run(["systemctl", "show", unit, "-p", "InvocationID", "--value"], check=False).stdout.strip()
+    sel = [f"_SYSTEMD_INVOCATION_ID={inv}"] if re.fullmatch(r"[0-9a-f]{32}", inv) else ["-u", unit]
+    res = run(["journalctl", *sel, "-n", "80", "--no-pager", "-o", "cat"], check=False)
+    if not res.stdout.strip():
+        res = run(["journalctl", "-u", unit, "-n", "60", "--no-pager", "-o", "cat"], check=False)
     desc = run(["systemctl", "show", unit, "-p", "Description", "--value"], check=False).stdout.strip()
     cause, lines = summarize_unit_journal(res.stdout)
     name = unit.removesuffix(".service")

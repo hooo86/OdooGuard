@@ -614,3 +614,35 @@ def test_restore_test_threshold_without_section_key(cfg):
     settings.job_thresholds_save(cfg, {"wal_max_lag": "10", "db_any_max_age": "2", "db_full_max_age": "8",
                                        "files_max_age": "1", "copy_max_age": "26", "restore_test_max_age": "10"})
     assert config_mod.load(cfg.path).restore_test.max_age == 10 * 86400
+
+
+def test_summary_of_copy_failure_without_noise_or_duplicates():
+    from odooguard.cli import summarize_unit_journal
+    journal = """copie vers nas1 OK
+Failed to start odooguard-copy.service - OdooGuard - copie des dépôts vers les NAS (vérifiée).
+2026-11-25 16:59:50,100 INFO copy:nas1 (copy) terminé en 8288 s
+2026-11-25 16:59:50,200 ERROR OdooGuard : échec copy:nas2 (copy) [mount] destination nas2 : /mnt/nas-backups n'est pas monté
+[CRITIQUE] OdooGuard : échec copy:nas2 (copy) [mount] | destination nas2 : /mnt/nas-backups n'est pas monté
+copie vers nas2 ÉCHEC : destination nas2 : /mnt/nas-backups n'est pas monté
+copie vers nas1 OK
+"""
+    cause, lines = summarize_unit_journal(journal)
+    assert cause == "copie vers nas2 ÉCHEC : destination nas2 : /mnt/nas-backups n'est pas monté"
+    assert lines.count("copie vers nas1 OK") == 1
+    assert not any(l.startswith(("[CRITIQUE]", "Failed to start")) for l in lines)
+
+
+def test_copy_skips_nas_removed_during_run(cfg, monkeypatch, capsys):
+    from odooguard import cli, dest as dest_mod
+    calls = []
+    monkeypatch.setattr(dest_mod, "preflight", lambda d: calls.append(d.name) or {})
+    monkeypatch.setattr(cli, "tracked", lambda ctx, comp, kind, job, **k: calls.append(comp) or {})
+    settings.job_nas_enable(cfg, {"name": "nas2", "enabled": False})   # suspendu après le démarrage
+    import types
+    ctx = types.SimpleNamespace(cfg=cfg, args=types.SimpleNamespace(what="copy", dest=None, wait=0), history=None)
+    cfg.destinations["nas2"].enabled = True   # la copie en cours croit encore nas2 actif
+    try:
+        cli.cmd_backup(ctx)
+    except Exception:
+        pass
+    assert "copy:nas2" not in calls and "copy:nas1" in calls
