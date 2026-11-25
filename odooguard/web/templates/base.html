@@ -27,13 +27,15 @@
         <a href="/" {% if path == '/' %}aria-current="page"{% endif %}><span>{{ icon('dashboard') }}État</span></a>
         <a href="/backups" {% if section == 'backups' %}aria-current="page"{% endif %}><span>{{ icon('backup') }}Sauvegardes</span></a>
         <a href="/history" {% if section == 'history' %}aria-current="page"{% endif %}><span>{{ icon('history') }}Historique</span></a>
+        <a href="/planification" {% if section == 'planification' %}aria-current="page"{% endif %}><span>{{ icon('event_repeat') }}Planification</span></a>
         <a href="/restore-tests" {% if section == 'restore-tests' %}aria-current="page"{% endif %}><span>{{ icon('fact_check') }}Tests de restauration</span></a>
         {% if role in ('operateur', 'admin') %}
         <a href="/restore" {% if section in ('restore', 'jobs') %}aria-current="page"{% endif %}><span>{{ icon('settings_backup_restore') }}Restaurer</span></a>
         {% endif %}
         <a href="/alerts" {% if section == 'alerts' %}aria-current="page"{% endif %}><span>{{ icon('notifications_active') }}Alertes</span>{% if alerts_count %}<span class="nav-badge" role="status" aria-label="{{ alerts_count }} alerte(s) active(s)">{{ alerts_count }}</span>{% endif %}</a>
+        <a href="/securite" {% if section == 'securite' %}aria-current="page"{% endif %}><span>{{ icon('security') }}Sécurité Odoo</span></a>
         <a href="/audit" {% if section == 'audit' %}aria-current="page"{% endif %}><span>{{ icon('receipt_long') }}Audit</span></a>
-        <a href="/reglages" {% if section in ('reglages', 'nas', 'planification', 'notifications', 'utilisateurs') %}aria-current="page"{% endif %}><span>{{ icon('settings') }}Réglages</span></a>
+        <a href="/reglages" {% if section in ('reglages', 'nas', 'notifications', 'utilisateurs', 'surveillance') %}aria-current="page"{% endif %}><span>{{ icon('settings') }}Réglages</span></a>
       </nav>
     </div>
     <div class="sidebar-foot">

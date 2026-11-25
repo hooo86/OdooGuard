@@ -145,10 +145,15 @@ CHANNELS = {c.name: c for c in (JournalChannel, EmailChannel, TelegramChannel)}
 
 
 def dispatch(cfg, level: str, title: str, body: str, *, key: str = "event",
-             history=None, force_all: bool = False) -> dict:
-    """Envoie sur chaque canal ; un canal en panne n'empêche pas les autres."""
+             history=None, force_all: bool = False, only: str | None = None) -> dict:
+    """Envoie sur chaque canal ; un canal en panne n'empêche pas les autres.
+
+    ``only`` : un seul canal (message de test d'un canal précis, même non activé).
+    """
     results: dict[str, str] = {}
     names = ["journal"] + [c for c in cfg.alerts.channels if c != "journal"]
+    if only:
+        names = [only]
     min_level = LEVELS.get(cfg.alerts.min_level, 1)
     for name in names:
         cls = CHANNELS.get(name)

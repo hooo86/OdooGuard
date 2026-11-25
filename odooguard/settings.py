@@ -237,11 +237,22 @@ def _nonempty(path: str) -> bool:
         return False
 
 
-def job_notify_test(cfg: Config, history) -> dict:
+TEST_CHANNELS = {"": "tous les canaux enregistrés", "email": "e-mail", "telegram": "Telegram"}
+
+
+def job_notify_test(cfg: Config, history, channel: str = "") -> dict:
     from odooguard import notify
-    res = notify.dispatch(cfg, "warning", "message de test",
+    if channel not in TEST_CHANNELS:
+        raise OdooGuardError("canal de test : email ou telegram", "usage")
+    if channel == "telegram" and not (cfg.alerts.telegram_token_file and cfg.alerts.telegram_chat_ids):
+        raise OdooGuardError("Telegram non configuré : enregistrer d'abord le jeton du bot et "
+                             "l'identifiant de conversation", "usage")
+    if channel == "email" and not (cfg.alerts.smtp_host and cfg.alerts.mail_to):
+        raise OdooGuardError("e-mail non configuré : enregistrer d'abord le serveur SMTP et les "
+                             "destinataires", "usage")
+    res = notify.dispatch(cfg, "warning", f"message de test ({TEST_CHANNELS[channel]})",
                           "Si vous lisez ceci, ce canal d'alerte OdooGuard fonctionne.",
-                          key="test", history=history, force_all=True)
+                          key="test", history=history, force_all=True, only=channel or None)
     failed = {k: v for k, v in res.items() if v != "ok"}
     if failed:
         raise OdooGuardError("échec d'envoi : " + " ; ".join(f"{k} : {v}" for k, v in failed.items()), "command")
@@ -327,3 +338,48 @@ def job_user_delete(cfg: Config, params: dict, actor: str) -> dict:
     del accounts[name]
     auth.write_accounts(cfg.web.users_file, accounts)
     return {"name": name, "message": f"compte {name} supprimé (sessions ouvertes fermées)"}
+
+
+# ------------------------------------------------------------------ surveillance
+UNIT_RE = re.compile(r"^[A-Za-z0-9@._:-]{1,100}$")
+
+
+def validate_monitoring(p: dict) -> dict:
+    def num(key, lo, hi, cast=float):
+        try:
+            v = cast(str(p.get(key, "")).replace(",", "."))
+        except ValueError:
+            raise OdooGuardError(f"{key} : nombre attendu", "usage") from None
+        if not lo <= v <= hi:
+            raise OdooGuardError(f"{key} : entre {lo} et {hi}", "usage")
+        return v
+    warn = num("disk_warn_pct", 1, 99)
+    crit = num("disk_crit_pct", 2, 100)
+    if warn >= crit:
+        raise OdooGuardError("le seuil critique doit être supérieur au seuil d'avertissement", "usage")
+    units = _split(p.get("services_local"))
+    if not 1 <= len(units) <= 20:
+        raise OdooGuardError("services OdooGuard surveillés : de 1 à 20 noms", "usage")
+    for u in units:
+        if not UNIT_RE.match(u):
+            raise OdooGuardError(f"nom de service invalide : {u}", "usage")
+    units = [u if "." in u else u + ".service" for u in units]
+    return {"disk_warn_pct": warn, "disk_crit_pct": crit, "services_local": units,
+            "security": bool(p.get("security")),
+            "failed_logins_warn": int(num("failed_logins_warn", 1, 10000, int)),
+            "failed_logins_window": int(num("failed_logins_window", 1, 1440, int)),
+            "notify_accounts": bool(p.get("notify_accounts")),
+            "keep_days": int(num("keep_days", 7, 3650, int))}
+
+
+def job_monitoring_save(cfg: Config, params: dict) -> dict:
+    v = validate_monitoring(params)
+    write_section(cfg.path, "monitoring", {
+        "disk_warn_pct": f"{v['disk_warn_pct']:g}", "disk_crit_pct": f"{v['disk_crit_pct']:g}",
+        "services_local": ", ".join(v["services_local"]),
+        "security": "yes" if v["security"] else "no",
+        "failed_logins_warn": v["failed_logins_warn"], "failed_logins_window": v["failed_logins_window"],
+        "notify_accounts": "yes" if v["notify_accounts"] else "no", "keep_days": v["keep_days"]},
+        comment="Surveillance - modifié depuis le tableau de bord")
+    return {**v, "message": f"surveillance enregistrée (disques : {v['disk_warn_pct']:g} % / "
+                            f"{v['disk_crit_pct']:g} %) ; prise en compte au prochain relevé (≤ 5 min)"}

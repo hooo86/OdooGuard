@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Surveillance{% endblock %}
+{% block page_title %}Surveillance{% endblock %}
+{% block page_subtitle %}Seuils d'espace disque, services surveillés et sécurité d'Odoo. Les alertes partent par les canaux réglés dans « Notifications », sans rafale (rappel puis « résolu »).{% endblock %}
+{% block content %}
+{% set f = form or {} %}
+{% if error %}<p class="banner banner-critical" role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="/surveillance/save" class="card wizard" autocomplete="off">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <fieldset {% if role != 'admin' %}disabled{% endif %}>
+    <legend>Espace disque (OdooGuard, serveur Odoo, NAS)</legend>
+    <div class="inline-fields">
+      <label>Avertissement à partir de (% occupé) <input type="number" name="disk_warn_pct" min="1" max="99" step="1" value="{{ f.disk_warn_pct or m.disk_warn_pct|round|int }}"></label>
+      <label>Critique à partir de (% occupé) <input type="number" name="disk_crit_pct" min="2" max="100" step="1" value="{{ f.disk_crit_pct or m.disk_crit_pct|round|int }}"></label>
+    </div>
+    <p class="small muted">S'ajoute à l'alerte d'espace libre minimal des dépôts (min_free_gb). Pour les NAS, l'occupation totale du partage est mesurée.</p>
+  </fieldset>
+  <fieldset {% if role != 'admin' %}disabled{% endif %}>
+    <legend>Services</legend>
+    <label>Services OdooGuard surveillés (séparés par des virgules) <input name="services_local" value="{{ f.services_local or m.services_local|join(', ') }}"></label>
+    <p class="small muted">Serveur Odoo : Odoo, chaque instance PostgreSQL, nginx ou apache2, cron et ssh sont surveillés automatiquement s'ils existent. Pour en ajouter : variable <code>MONITOR_SERVICES="nom1 nom2"</code> dans <code>/etc/odooguard-agent.conf</code> sur le serveur Odoo. Un service arrêté déclenche une alerte critique.</p>
+  </fieldset>
+  <fieldset {% if role != 'admin' %}disabled{% endif %}>
+    <legend><label class="radio"><input type="checkbox" name="security" {% if (form and f.security) or (not form and m.security) %}checked{% endif %}> Sécurité d'Odoo</label></legend>
+    <div class="inline-fields">
+      <label>Alerte à partir de (connexions échouées) <input type="number" name="failed_logins_warn" min="1" max="10000" value="{{ f.failed_logins_warn or m.failed_logins_warn }}"></label>
+      <label>en (minutes) <input type="number" name="failed_logins_window" min="1" max="1440" value="{{ f.failed_logins_window or m.failed_logins_window }}"></label>
+      <label>Conservation (jours) <input type="number" name="keep_days" min="7" max="3650" value="{{ f.keep_days or m.keep_days }}"></label>
+    </div>
+    <label class="radio"><input type="checkbox" name="notify_accounts" {% if (form and f.notify_accounts) or (not form and m.notify_accounts) %}checked{% endif %}> Prévenir à chaque création, suppression, archivage ou réactivation de compte Odoo</label>
+    <p class="small muted">Critique à partir du triple du seuil. Détail : page « Sécurité Odoo ».</p>
+  </fieldset>
+  {% if role == 'admin' %}<div class="actions"><a href="/reglages">← Réglages</a><button type="submit" class="primary">Enregistrer</button></div>
+  {% else %}<p class="small muted">Modification réservée au rôle admin.</p>{% endif %}
+</form>
+{% endblock %}

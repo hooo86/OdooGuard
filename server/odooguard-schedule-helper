@@ -7,6 +7,8 @@
 #   reset   MINUTEUR                              retour à la planification d'origine
 #   enable  MINUTEUR                              active le minuteur
 #   disable MINUTEUR                              suspend le minuteur
+#   timezone ZONE                                 fuseau horaire du système (timedatectl),
+#                                                 puis redémarrage du tableau de bord
 #
 # MINUTEUR : uniquement les minuteurs OdooGuard de la liste ci-dessous.
 # EXPRESSION : format OnCalendar de systemd, vérifiée par « systemd-analyze calendar ».
@@ -65,6 +67,19 @@ def main():
     if len(sys.argv) < 2:
         out(False, error="verbe manquant : set | reset | enable | disable")
     verb, args = sys.argv[1], sys.argv[2:]
+    if verb == "timezone":
+        tz = args[0] if len(args) == 1 else ""
+        if not re.match(r"^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$", tz) or ".." in tz \
+                or not os.path.isfile(os.path.join("/usr/share/zoneinfo", tz)):
+            out(False, error=f"fuseau horaire invalide : {tz!r}")
+        if not TEST_ROOT:
+            r = subprocess.run(["timedatectl", "set-timezone", tz], capture_output=True, text=True, timeout=60)
+            if r.returncode != 0:
+                out(False, error=f"timedatectl : {(r.stderr or r.stdout).strip()[-300:]}")
+            # Le tableau de bord lit l'heure locale au démarrage : on le relance (sans attendre)
+            subprocess.run(["systemctl", "try-restart", "--no-block", "odooguard-web.service"],
+                           capture_output=True, timeout=60)
+        out(True, timezone=tz)
     timer = timer_arg(args)
     ddir = os.path.join(UNIT_DIR, timer + ".d")
     if verb == "set":

@@ -25,6 +25,8 @@
 #   neutralize NOM                 odoo neutralize
 #   db-report NOM                  comptages de contrôle + lisibilité des pièces jointes (JSON)
 #   odoo-start | odoo-stop | odoo-status
+#   monitor CURSEUR BASE...        surveillance, lecture seule : disques, services,
+#                                  connexions Odoo (journal), comptes Odoo (JSON)
 #   pg-restore-cluster VER CLUSTER STANZA HORODATAGE|latest
 #   create-slot VER CLUSTER        (re)crée le slot de réplication « odooguard »
 #   db-list-test                   bases de test « ogtest_* » (JSON)          [VM de test]
@@ -166,6 +168,169 @@ db-drop-test)
     ;;
 odoo-status)
     systemctl is-active "$ODOO_SERVICE" || true
+    ;;
+monitor)
+    # Surveillance (lecture seule) : disques, services, connexions Odoo, comptes Odoo.
+    #   monitor CURSEUR BASE [BASE...]
+    # CURSEUR : position de lecture du journal d'Odoo renvoyée par l'appel précédent
+    # (« - » au premier appel). Aucun état n'est conservé sur ce serveur.
+    cursor="${1:--}"; shift || true
+    [[ "$cursor" =~ ^(-|f:[0-9]{1,20}:[0-9]{1,20}|j:[0-9]{1,12})$ ]] || die "curseur invalide"
+    for db in "$@"; do valid_db "$db"; done
+    users_json="{"
+    sep=""
+    for db in "$@"; do
+        if db_exists "$db"; then
+            u=$(as_pg psql -XAtq -d "$db" <<'SQL' 2>/dev/null || echo '[]'
+select coalesce(json_agg(json_build_object(
+  'id', u.id, 'login', u.login, 'name', p.name, 'active', u.active, 'share', u.share,
+  'created', extract(epoch from u.create_date), 'written', extract(epoch from u.write_date),
+  'created_by', cu.login, 'written_by', wu.login,
+  'last_login', (select extract(epoch from max(l.create_date)) from res_users_log l where l.create_uid = u.id)
+) order by u.id), '[]')
+from res_users u
+join res_partner p on p.id = u.partner_id
+left join res_users cu on cu.id = u.create_uid
+left join res_users wu on wu.id = u.write_uid
+SQL
+)
+        else
+            u='null'
+        fi
+        users_json+="$sep$(json_str "$db"): ${u:-[]}"
+        sep=", "
+    done
+    users_json+="}"
+    logfile=$(sed -n 's/^[[:space:]]*logfile[[:space:]]*=[[:space:]]*//p' "$ODOO_CONF" 2>/dev/null | tail -1 | tr -d '[:space:]')
+    [[ "$logfile" =~ ^(False|false|None)?$ ]] && logfile=""
+    pgdata="/var/lib/postgresql"
+    MONITOR_SERVICES="${MONITOR_SERVICES:-}"
+    python3 - "$cursor" "$logfile" "$ODOO_SERVICE" "$FILESTORE" "$pgdata" "$MONITOR_SERVICES" "$users_json" <<'PY'
+import datetime as dt, json, os, re, subprocess, sys
+cursor, logfile, odoo_service, filestore, pgdata, extra_services, users_json = sys.argv[1:8]
+out = {"version": 1}
+
+# ---- disques : systèmes de fichiers des chemins importants (sans doublon)
+disks, seen = [], set()
+for label, path in (("système", "/"), ("PostgreSQL", pgdata), ("filestore Odoo", filestore),
+                    ("journaux", "/var/log")):
+    if not os.path.exists(path):
+        continue
+    st = os.statvfs(path)
+    dev = os.stat(path).st_dev
+    if dev in seen:
+        continue
+    seen.add(dev)
+    mnt = path
+    while not os.path.ismount(mnt):
+        mnt = os.path.dirname(mnt)
+    total = st.f_blocks * st.f_frsize
+    free = st.f_bavail * st.f_frsize
+    disks.append({"label": label, "mount": mnt, "total": total, "free": free,
+                  "used": total - st.f_bfree * st.f_frsize})
+out["disks"] = disks
+
+# ---- services : Odoo, PostgreSQL (instances), serveur web, cron, ssh + liste locale
+def show(unit):
+    r = subprocess.run(["systemctl", "show", unit, "-p",
+                        "Id,LoadState,ActiveState,SubState,ActiveEnterTimestamp,NRestarts,Description"],
+                       capture_output=True, text=True, timeout=20)
+    return dict(l.split("=", 1) for l in r.stdout.splitlines() if "=" in l)
+units = [odoo_service + ".service"]
+r = subprocess.run(["systemctl", "list-units", "--all", "--plain", "--no-legend", "postgresql@*.service"],
+                   capture_output=True, text=True, timeout=20)
+units += [l.split()[0] for l in r.stdout.splitlines() if l.strip()]
+for u in ("nginx.service", "apache2.service", "cron.service", "ssh.service"):
+    units.append(u)
+units += [u if "." in u else u + ".service" for u in extra_services.split()]
+services, done = [], set()
+for u in units:
+    if u in done:
+        continue
+    done.add(u)
+    s = show(u)
+    if s.get("LoadState") != "loaded" and u not in (odoo_service + ".service",) and u not in extra_services.split():
+        continue  # service facultatif absent de ce serveur
+    services.append({"unit": u, "description": s.get("Description", ""), "load": s.get("LoadState"),
+                     "active": s.get("ActiveState"), "sub": s.get("SubState"),
+                     "since": s.get("ActiveEnterTimestamp", ""), "restarts": s.get("NRestarts")})
+r = subprocess.run(["systemctl", "list-units", "--state=failed", "--plain", "--no-legend"],
+                   capture_output=True, text=True, timeout=20)
+out["services"] = services
+out["failed_units"] = [l.split()[0] for l in r.stdout.splitlines() if l.strip()][:30]
+
+# ---- connexions Odoo (journal d'Odoo, heures en UTC)
+LOGIN = re.compile(r"Login (failed|successful) for db:(\S*) login:(.*?) from (\S+)")
+STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+events, MAXEV = [], 5000
+
+def take(line, ts=None):
+    m = LOGIN.search(line)
+    if not m or len(events) >= MAXEV:
+        return
+    if ts is None:
+        s = STAMP.match(line)
+        if not s:
+            return
+        ts = dt.datetime.strptime(s.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp()
+    events.append({"ts": ts, "ok": m.group(1) == "successful", "db": m.group(2),
+                   "login": m.group(3)[:120], "ip": m.group(4).rstrip(".,")[:64]})
+
+def read_from(path, offset):
+    with open(path, "rb") as fh:
+        fh.seek(offset)
+        for raw in fh:
+            take(raw.decode("utf-8", "replace"))
+        return fh.tell()
+
+auth = {"source": "", "cursor": cursor}
+if logfile and os.path.isfile(logfile):
+    auth["source"] = "fichier " + logfile
+    st = os.stat(logfile)
+    ino, off = st.st_ino, max(0, st.st_size - 2 * 1024 * 1024)  # 1er appel : 2 Mio les plus récents
+    if cursor.startswith("f:"):
+        _, c_ino, c_off = cursor.split(":")
+        c_ino, c_off = int(c_ino), int(c_off)
+        if c_ino == ino and c_off <= st.st_size:
+            off = c_off
+        else:
+            # Fichier remplacé (rotation) : fin de l'ancien fichier s'il est encore là, puis le nouveau
+            for old in (logfile + ".1", logfile + ".0"):
+                try:
+                    if os.stat(old).st_ino == c_ino:
+                        read_from(old, c_off)
+                except OSError:
+                    pass
+            off = 0
+    end = read_from(logfile, off)
+    auth["cursor"] = f"f:{ino}:{end}"
+else:
+    auth["source"] = "journal systemd (" + odoo_service + ")"
+    # Fenêtre [curseur, maintenant[ en secondes entières : chaque ligne lue une seule fois
+    import time
+    now = int(time.time())
+    since = int(cursor[2:]) if cursor.startswith("j:") else now - 7200
+    cmd = ["journalctl", "-u", odoo_service, "-o", "json", "--no-pager",
+           "--since", f"@{since}", "--until", f"@{now}"]
+    r = subprocess.run(cmd + ["-g", "Login (failed|successful) for db:"], capture_output=True,
+                       text=True, timeout=120)
+    if r.returncode != 0:  # journalctl sans recherche par motif : filtrage ici
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    for l in r.stdout.splitlines():
+        try:
+            e = json.loads(l)
+        except ValueError:
+            continue
+        msg = e.get("MESSAGE")
+        if isinstance(msg, str):
+            take(msg, int(e.get("__REALTIME_TIMESTAMP", "0")) / 1e6)
+    auth["cursor"] = f"j:{now}"
+auth["events"] = events
+auth["truncated"] = len(events) >= MAXEV
+out["auth"] = auth
+out["users"] = json.loads(users_json)
+print(json.dumps(out))
+PY
     ;;
 # --------------------------------------------------------------- écriture
 odoo-stop)  log "arrêt d'Odoo";     systemctl stop "$ODOO_SERVICE" ;;

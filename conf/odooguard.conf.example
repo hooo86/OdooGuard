@@ -72,6 +72,19 @@ db_full_max_age = 691200
 files_max_age = 3600
 copy_max_age = 10800
 
+[monitoring]
+# Espace disque (OdooGuard, serveur Odoo, NAS) : % d'occupation avertissement / critique
+disk_warn_pct = 80
+disk_crit_pct = 90
+# Services OdooGuard surveillés (ceux du serveur Odoo sont trouvés par l'agent)
+services_local = odooguard-walreceiver.service, odooguard-web.service, odooguard-jobs.service
+# Sécurité d'Odoo : connexions (journal d'Odoo) et comptes créés / supprimés / archivés
+security = yes
+failed_logins_warn = 10
+failed_logins_window = 15
+notify_accounts = yes
+keep_days = 180
+
 # ----------------------------------------------------------------- cibles
 # VM de test isolée (restaurations de contrôle, phase 3)
 [target:testvm]

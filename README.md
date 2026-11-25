@@ -51,7 +51,7 @@ exige `--force` et la saisie du nom exact (ou `--confirm`). Elle est journalisé
 | [docs/retour-arriere-phase1.md](docs/retour-arriere-phase1.md) | retour arrière |
 | [docs/tests-et-recette.md](docs/tests-et-recette.md) | tests automatisés et recette des critères d'acceptation |
 | [docs/installation-phase3bis.md](docs/installation-phase3bis.md) | copie hors ligne vers G:\, rotation des disques |
-| [docs/installation-phase3.md](docs/installation-phase3.md) | VM de test isolée, test de restauration hebdomadaire, assistant de restauration web, rôles |
+| [docs/installation-phase3.md](docs/installation-phase3.md) | VM de test isolée, test de restauration hebdomadaire, assistant de restauration web, rôles, réglages et surveillance (stockage, services, sécurité Odoo) |
 | [docs/installation-phase2.md](docs/installation-phase2.md) | tableau de bord, alertes e-mail et Telegram, Zabbix, Veeam et copie G:\, retour arrière |
 
 ## Arborescence
@@ -67,6 +67,7 @@ odooguard/            application Python (bibliothèque standard uniquement en p
   nas.py              gestion des NAS depuis le tableau de bord (config, montage via le programme root)
   jobs.py             file des demandes web, rôles, re-validation, exécution
   status.py           état global, mesure de la perte de données
+  monitor.py          surveillance : espace disque, services, sécurité Odoo (connexions, comptes)
   notify.py           alertes : journal, e-mail, Telegram, anti-rafale
   external.py         rapports Veeam / copie G:\
   zabbix.py           indicateurs Zabbix (autonome, sans secret)

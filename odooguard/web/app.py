@@ -57,6 +57,11 @@ def component_label(c: dict) -> str:
     return n
 
 
+ACCOUNT_KINDS = {"user_created": "Compte créé", "user_deleted": "Compte supprimé",
+                 "user_archived": "Compte archivé", "user_reactivated": "Compte réactivé",
+                 "user_renamed": "Identifiant modifié"}
+
+
 def create_app(cfg: Config, history: History | None = None) -> FastAPI:
     history = history or History(cfg.history_db)
     secret = auth.load_secret(cfg.web.secret_file)
@@ -613,7 +618,22 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         if err:
             return err
         from odooguard import schedule
-        return page(request, "planification.html", user=user, timers=schedule.all_timers())
+        return page(request, "planification.html", user=user, timers=schedule.all_timers(),
+                    tz=schedule.current_timezone(), zones=schedule.timezones())
+
+    @app.post("/planification/timezone")
+    async def planification_timezone(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        from odooguard import schedule
+        try:
+            tz = schedule.validate_timezone(form.get("timezone", ""))
+        except OdooGuardError as exc:
+            return page(request, "error.html", user=user, message=str(exc))
+        return queue(request, user, role, "schedule", {"action": "timezone", "timezone": tz},
+                     target="timezone")
 
     @app.get("/planification/{timer}", response_class=HTMLResponse)
     def planification_form(request: Request, timer: str):
@@ -625,6 +645,7 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
             return page(request, "error.html", user=user, message="Minuteur inconnu.")
         t = schedule.current(timer)
         return page(request, "planification_form.html", user=user, t=t, days=schedule.DAYS,
+                    tz=schedule.current_timezone(),
                     intervals=list(schedule.INTERVALS), form={"mode": "advanced",
                                                              "advanced": "\n".join(t["specs"])},
                     error=None)
@@ -643,7 +664,8 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
             specs = schedule.validate_specs(schedule.build_specs(form))
         except OdooGuardError as exc:
             return page(request, "planification_form.html", user=user, t=schedule.current(timer),
-                        days=schedule.DAYS, intervals=list(schedule.INTERVALS), form=form, error=str(exc))
+                        days=schedule.DAYS, intervals=list(schedule.INTERVALS), form=form, error=str(exc),
+                        tz=schedule.current_timezone())
         return queue(request, user, role, "schedule",
                      {"timer": timer, "action": "set", "specs": specs, "enable": form.get("enable") == "on"},
                      target=timer)
@@ -707,7 +729,11 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         user, role, err = require(request, "admin", form.get("csrf", ""))
         if err:
             return err
-        return queue(request, user, role, "notify-test", {}, target="notifications")
+        channel = form.get("channel", "")
+        if channel not in ("", "email", "telegram"):
+            return page(request, "error.html", user=user, message="Canal inconnu.")
+        return queue(request, user, role, "notify-test", {"channel": channel},
+                     target=f"notifications:{channel or 'tous'}")
 
     @app.post("/notifications/telegram")
     async def notifications_telegram(request: Request):
@@ -720,6 +746,65 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         if form.get("telegram_token"):
             params["token_token"] = settings.stash_secret(cfg, form["telegram_token"].strip())
         return queue(request, user, role, "telegram-discover", params, target="telegram")
+
+    # ---- surveillance (seuils, services, sécurité)
+    MON_FIELDS = ("disk_warn_pct", "disk_crit_pct", "services_local", "failed_logins_warn",
+                  "failed_logins_window", "keep_days")
+
+    @app.get("/surveillance", response_class=HTMLResponse)
+    def surveillance(request: Request):
+        user, role, err = require(request, "lecteur")
+        if err:
+            return err
+        return page(request, "surveillance.html", user=user, m=fresh_cfg().monitoring, form=None, error=None)
+
+    @app.post("/surveillance/save")
+    async def surveillance_save(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        from odooguard import settings
+        params = {k: form.get(k, "") for k in MON_FIELDS}
+        params["security"] = form.get("security") == "on"
+        params["notify_accounts"] = form.get("notify_accounts") == "on"
+        try:
+            v = settings.validate_monitoring(params)
+        except OdooGuardError as exc:
+            return page(request, "surveillance.html", user=user, m=fresh_cfg().monitoring, form=form,
+                        error=str(exc))
+        v["services_local"] = ", ".join(v["services_local"])
+        return queue(request, user, role, "monitoring-save", v, target="surveillance")
+
+    # ---- sécurité Odoo (lecture)
+    @app.get("/securite", response_class=HTMLResponse)
+    def securite(request: Request, days: int = 7):
+        user, role, err = require(request, "lecteur")
+        if err:
+            return err
+        days = days if days in (1, 7, 30, 90) else 7
+        now = time.time()
+        since = now - days * 86400
+        c = fresh_cfg()
+        users = {}
+        for db in c.databases:
+            snap = history.kv_get(f"odoo_users:{db}") or {}
+            rows = sorted(snap.values(), key=lambda u: u.get("created") or 0, reverse=True)
+            users[db] = {"total": len(rows),
+                         "internal": sum(1 for u in rows if u.get("active") and not u.get("share")),
+                         "portal": sum(1 for u in rows if u.get("active") and u.get("share")),
+                         "recent": rows[:15]}
+        window = c.monitoring.failed_logins_window
+        return page(request, "securite.html", user=user, days=days, m=c.monitoring,
+                    failed=history.security_events(since, ("login_failed",), 500),
+                    succeeded=history.security_events(since, ("login_ok",), 100),
+                    accounts=history.security_events(since, tuple(ACCOUNT_KINDS), 300),
+                    top=history.security_top_ips(since),
+                    n_failed=history.security_count(since, "login_failed"),
+                    n_ok=history.security_count(since, "login_ok"),
+                    n_window=history.security_count(now - window * 60, "login_failed"),
+                    users=users, source=history.kv_get("odoo_auth_source", ""),
+                    cursor=history.kv_get("odoo_auth_cursor"), account_fr=ACCOUNT_KINDS)
 
     # ---- comptes
     @app.get("/utilisateurs", response_class=HTMLResponse)

@@ -32,7 +32,8 @@ log = logging.getLogger("odooguard")
 
 ROLES = ("lecteur", "operateur", "admin")
 
-ADMIN_JOBS = ("schedule", "notify-save", "notify-test", "telegram-discover", "user-save", "user-delete")
+ADMIN_JOBS = ("schedule", "notify-save", "notify-test", "telegram-discover", "user-save", "user-delete",
+              "monitoring-save")
 
 # Sauvegardes lançables depuis le tableau de bord -> service systemd (le même que
 # celui des planifications : mêmes verrous, alertes OnFailure, journaux, progression).
@@ -163,9 +164,11 @@ def run_job(cfg: Config, history: History, job: dict) -> None:
             elif kind == "notify-save":
                 result = settings.job_notify_save(fresh, params)
             elif kind == "notify-test":
-                result = settings.job_notify_test(fresh, history)
+                result = settings.job_notify_test(fresh, history, str(params.get("channel") or ""))
             elif kind == "telegram-discover":
                 result = settings.job_telegram_discover(fresh, params)
+            elif kind == "monitoring-save":
+                result = settings.job_monitoring_save(fresh, params)
             elif kind == "user-save":
                 result = settings.job_user_save(fresh, params, job["user"])
             else:

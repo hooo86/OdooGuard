@@ -130,6 +130,21 @@ class RestoreTestSettings:
 
 
 @dataclass
+class MonitoringSettings:
+    """Surveillance : espace disque, services, sécurité d'Odoo (section [monitoring])."""
+
+    disk_warn_pct: float = 80.0  # occupation à partir de laquelle on avertit
+    disk_crit_pct: float = 90.0  # ... et à partir de laquelle c'est critique
+    services_local: list[str] = field(default_factory=lambda: [
+        "odooguard-walreceiver.service", "odooguard-web.service", "odooguard-jobs.service"])
+    security: bool = True  # lecture des connexions et des comptes Odoo
+    failed_logins_warn: int = 10  # échecs de connexion dans la fenêtre => avertissement
+    failed_logins_window: int = 15  # minutes
+    notify_accounts: bool = True  # prévenir à chaque création / suppression de compte Odoo
+    keep_days: int = 180  # conservation des événements de sécurité
+
+
+@dataclass
 class Config:
     path: str
     site: str = "LNHC"
@@ -175,6 +190,7 @@ class Config:
     alerts: AlertSettings = field(default_factory=AlertSettings)
     web: WebSettings = field(default_factory=WebSettings)
     restore_test: RestoreTestSettings = field(default_factory=RestoreTestSettings)
+    monitoring: MonitoringSettings = field(default_factory=MonitoringSettings)
 
     # ------------------------------------------------------------------ accès
     def target(self, name: str) -> Target:
@@ -363,6 +379,18 @@ def load(path: str | None = None, *, strict_perms: bool = True) -> Config:
     t.start_odoo = r.bool("restore_test", "start_odoo", True)
     t.http_timeout = r.int("restore_test", "http_timeout", t.http_timeout)
     t.max_age = r.int("restore_test", "max_age", t.max_age)
+
+    m = cfg.monitoring
+    m.disk_warn_pct = r.float("monitoring", "disk_warn_pct", m.disk_warn_pct)
+    m.disk_crit_pct = r.float("monitoring", "disk_crit_pct", m.disk_crit_pct)
+    m.services_local = _split(r.get("monitoring", "services_local", "") or "") or m.services_local
+    m.security = r.bool("monitoring", "security", m.security)
+    m.failed_logins_warn = r.int("monitoring", "failed_logins_warn", m.failed_logins_warn)
+    m.failed_logins_window = r.int("monitoring", "failed_logins_window", m.failed_logins_window)
+    m.notify_accounts = r.bool("monitoring", "notify_accounts", m.notify_accounts)
+    m.keep_days = r.int("monitoring", "keep_days", m.keep_days)
+    if not 1 <= m.disk_warn_pct < m.disk_crit_pct <= 100:
+        raise ConfigError("[monitoring] il faut 1 ≤ disk_warn_pct < disk_crit_pct ≤ 100")
 
     for section in cp.sections():
         if section.startswith("target:"):

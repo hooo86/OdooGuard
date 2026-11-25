@@ -192,13 +192,23 @@ def compute(cfg: Config, history: History, *, query_source: bool = True) -> dict
             if LEVELS[c["level"]] < 1:
                 c["level"] = "warning"
 
+    # -------------------------------------------------- stockage, services, sécurité Odoo
+    from odooguard import monitor
+    try:
+        mon_comps, mon_data = monitor.collect(cfg, history, query_source=query_source,
+                                              previous=monitor.read_previous(cfg))
+    except Exception as exc:  # noqa: BLE001 - jamais au détriment de l'état des sauvegardes
+        mon_comps, mon_data = [_component("surveillance", "warning", message=f"surveillance : {exc}"[:400],
+                                          group="monitor")], {}
+    comps.extend(mon_comps)
+
     # Perte de données maximale actuelle, par nature de données
     known = [x for x in (lag, db_age) if x is not None]
     rpo_db = min(known) if known else None  # « jamais » tant qu'aucune sauvegarde n'existe
     rpo = {"db_seconds": rpo_db, "files_seconds": files_age}
     overall = max((c["level"] for c in comps), key=LEVELS.get, default="unknown")
     return {"generated_at": now, "site": cfg.site, "overall": overall, "rpo": rpo,
-            "components": comps}
+            "components": comps, "monitor": mon_data}
 
 
 def record(cfg: Config, history: History, status: dict) -> None:

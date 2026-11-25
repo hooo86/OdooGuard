@@ -253,15 +253,16 @@ quatre actions (`apply`, `ensure`, `status`, `remove`), valide chaque argument, 
 point de montage et les options de montage. Le mot de passe passe par l'entrée standard,
 jamais par la ligne de commande.
 
-## 5 ter. Planification, notifications et utilisateurs depuis le tableau de bord
+## 5 ter. Planification, notifications, surveillance et utilisateurs depuis le tableau de bord
 
-Menu **Réglages**. La consultation est ouverte à tous les rôles, la modification est
-réservée au rôle admin.
+Menu **Planification** (barre latérale) et menu **Réglages**. La consultation est ouverte
+à tous les rôles, la modification est réservée au rôle admin.
 
 | Page | Ce qu'on y fait |
 |---|---|
-| **Planification** | Pour chaque type (base complète, différentielle, incrémentale, fichiers, copie NAS, vérifications, maintenance, test de restauration) : la planification actuelle et la prochaine exécution. On peut la modifier (heures fixes certains jours, toutes les heures sur une plage, intervalle régulier, ou expression systemd avancée), la suspendre ou l'activer, ou rétablir la planification d'origine. |
-| **Notifications** | Serveur SMTP (serveur, port, sécurité, compte, mot de passe, expéditeur, destinataires), bot Telegram (jeton, conversations, proxy), niveau minimal, rappel, message « résolu ». Bouton **Envoyer un message de test**, et bouton **Trouver mes conversations Telegram** qui affiche l'identifiant à renseigner. |
+| **Planification** | Fuseau horaire du serveur OdooGuard (minuteurs, journaux, affichage ; Algérie : `Africa/Algiers`). Pour chaque type (base complète, différentielle, incrémentale, fichiers, copie NAS, vérifications, maintenance, test de restauration) : la planification actuelle et la prochaine exécution. On peut la modifier (heures fixes certains jours, toutes les heures sur une plage, intervalle régulier, ou expression systemd avancée ; seuls les champs du mode choisi restent actifs), la suspendre ou l'activer, ou rétablir la planification d'origine. |
+| **Notifications** | Serveur SMTP (serveur, port, sécurité, compte, mot de passe, expéditeur, destinataires), bot Telegram (jeton, conversations, proxy), niveau minimal, rappel, message « résolu ». Boutons **Tester Telegram**, **Tester l'e-mail**, **Tester tous les canaux**, et **Trouver mes conversations Telegram** qui affiche l'identifiant à renseigner. |
+| **Surveillance** | Seuils d'espace disque (% d'occupation, avertissement et critique), services OdooGuard surveillés, seuil de connexions Odoo échouées, alerte sur les changements de comptes Odoo. |
 | **Utilisateurs** | Créer un compte, changer son rôle, réinitialiser son mot de passe (12 caractères minimum), le supprimer. On ne peut ni se supprimer soi-même, ni supprimer ou rétrograder le dernier administrateur. |
 
 Fonctionnement :
@@ -281,6 +282,41 @@ Fonctionnement :
 
 Si vous espacez une sauvegarde, adaptez les seuils d'alerte correspondants
 (`[thresholds]`), sinon une alerte « trop ancienne » apparaîtra.
+
+## 5 quater. Surveillance : stockage, services, sécurité d'Odoo
+
+Relevé toutes les 5 minutes par le contrôle d'état, alertes par les mêmes canaux et sans
+rafale (nouveau, rappel, résolu) :
+
+- **Stockage** (encart du tableau de bord) : OdooGuard (système, dépôts), serveur Odoo
+  (système, PostgreSQL, filestore, journaux), chaque NAS monté avec la place occupée par
+  OdooGuard. Alerte au-delà des seuils réglés dans « Surveillance » (80 % / 90 % par défaut).
+- **Services** : sur le serveur Odoo, Odoo, chaque instance PostgreSQL, nginx ou apache2,
+  cron et ssh (s'ils existent), plus `MONITOR_SERVICES` de `/etc/odooguard-agent.conf` ;
+  sur OdooGuard, réception WAL, tableau de bord et travaux. Un service arrêté est critique.
+- **Sécurité Odoo** (menu du même nom) : connexions échouées (date, base, identifiant
+  saisi, adresse IP) et réussies, adresses à l'origine des échecs, comptes créés,
+  supprimés, archivés, réactivés ou renommés, derniers comptes créés par base. Alerte si
+  le nombre d'échecs dépasse le seuil sur la fenêtre (critique au triple), et à chaque
+  changement de compte.
+
+Sources, en lecture seule, via le verbe `monitor` de l'agent :
+- connexions : journal d'Odoo (`logfile` de `odoo.conf`, sinon journal systemd du service).
+  Odoo y écrit « Login failed / Login successful » au niveau `info` (réglage par défaut).
+  La position de lecture est conservée par OdooGuard, et les rotations du journal sont suivies ;
+- comptes : table `res_users` de chaque base de `[odoo] databases`. Les suppressions sont
+  constatées au relevé suivant (≤ 5 min) ;
+- derrière un proxy inverse, l'adresse IP réelle n'apparaît que si Odoo tourne avec
+  `proxy_mode = True`.
+
+**Mise à jour de l'agent sur server01** (nécessaire pour cette surveillance) :
+
+```bash
+cd ~/odooguard-src && git pull && sudo install -m 755 server/odooguard-agent /usr/local/sbin/odooguard-agent
+```
+
+Tant que l'agent n'est pas à jour, le tableau de bord affiche « agent du serveur Odoo trop
+ancien » ; les sauvegardes ne sont pas concernées.
 
 ## 6. Retour arrière
 

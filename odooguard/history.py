@@ -33,6 +33,26 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS runs_component ON runs(component, started_at);
 
+CREATE TABLE IF NOT EXISTS security_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          REAL NOT NULL,          -- heure de l'événement (UTC, epoch)
+    kind        TEXT NOT NULL,          -- login_failed, login_ok, user_created, user_deleted,
+                                        -- user_archived, user_reactivated, user_renamed
+    db          TEXT,
+    login       TEXT,
+    ip          TEXT,
+    actor       TEXT,                   -- compte Odoo auteur (comptes)
+    detail      TEXT
+);
+CREATE INDEX IF NOT EXISTS security_events_ts ON security_events(ts);
+CREATE INDEX IF NOT EXISTS security_events_kind ON security_events(kind, ts);
+
+CREATE TABLE IF NOT EXISTS kv (
+    key         TEXT PRIMARY KEY,
+    value       TEXT,
+    updated_at  REAL
+);
+
 CREATE TABLE IF NOT EXISTS metrics (
     ts     REAL NOT NULL,
     name   TEXT NOT NULL,
@@ -209,6 +229,57 @@ class History:
             return [dict(r) for r in c.execute(q, args).fetchall()]
 
     # ------------------------------------------------------------ mesures
+    # ------------------------------------------------------------ clé / valeur
+    def kv_get(self, key: str, default: Any = None) -> Any:
+        with self._conn() as c:
+            row = c.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+        return json.loads(row["value"]) if row else default
+
+    def kv_put(self, key: str, value: Any) -> None:
+        with self._conn() as c:
+            c.execute("INSERT INTO kv(key, value, updated_at) VALUES (?,?,?)"
+                      " ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                      (key, json.dumps(value, default=str), time.time()))
+
+    # ------------------------------------------------------------ sécurité Odoo
+    def security_add(self, events: list[dict]) -> int:
+        if not events:
+            return 0
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO security_events(ts, kind, db, login, ip, actor, detail)"
+                " VALUES (:ts, :kind, :db, :login, :ip, :actor, :detail)",
+                [{"db": None, "login": None, "ip": None, "actor": None, "detail": None, **e} for e in events])
+        return len(events)
+
+    def security_events(self, since: float, kinds: tuple[str, ...] | None = None,
+                        limit: int = 500) -> list[dict]:
+        q = "SELECT * FROM security_events WHERE ts >= ?"
+        args: list[Any] = [since]
+        if kinds:
+            q += f" AND kind IN ({','.join('?' * len(kinds))})"
+            args += list(kinds)
+        q += " ORDER BY ts DESC, id DESC LIMIT ?"
+        args.append(limit)
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(q, args)]
+
+    def security_count(self, since: float, kind: str) -> int:
+        with self._conn() as c:
+            return c.execute("SELECT count(*) FROM security_events WHERE ts >= ? AND kind = ?",
+                             (since, kind)).fetchone()[0]
+
+    def security_top_ips(self, since: float, kind: str = "login_failed", limit: int = 10) -> list[dict]:
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT ip, count(*) AS n, max(ts) AS last, count(DISTINCT login) AS logins"
+                " FROM security_events WHERE ts >= ? AND kind = ? GROUP BY ip ORDER BY n DESC LIMIT ?",
+                (since, kind, limit))]
+
+    def security_purge(self, older_than: float) -> None:
+        with self._conn() as c:
+            c.execute("DELETE FROM security_events WHERE ts < ?", (older_than,))
+
     def metric(self, name: str, value: float, ts: float | None = None) -> None:
         with self._conn() as c:
             c.execute("INSERT INTO metrics(ts, name, value) VALUES (?,?,?)",

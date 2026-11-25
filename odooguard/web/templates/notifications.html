@@ -41,11 +41,15 @@
 </form>
 <section class="card wizard">
   <h2>Vérifier</h2>
+  <p class="small muted">Enregistrer d'abord les réglages : le test utilise la configuration enregistrée.</p>
+  <div class="button-row">
+  {% for ch, lib, ic in (('telegram', 'Tester Telegram', 'send'), ('email', "Tester l'e-mail", 'mail'), ('', 'Tester tous les canaux', 'notifications_active')) %}
   <form method="post" action="/notifications/test" class="inline">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <button type="submit">Envoyer un message de test</button>
-    <span class="small muted">sur tous les canaux enregistrés</span>
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="channel" value="{{ ch }}">
+    <button type="submit">{{ icon(ic) }}{{ lib }}</button>
   </form>
+  {% endfor %}
+  </div>
   <form method="post" action="/notifications/telegram" class="inline-fields" autocomplete="off">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <label>Jeton (facultatif si déjà enregistré) <input type="password" name="telegram_token" autocomplete="new-password"></label>

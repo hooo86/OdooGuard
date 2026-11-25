@@ -29,11 +29,61 @@
     </article>
   </section>
 
+  {% set mon = st.monitor or {} %}
+  {% if mon %}
+  <section class="widgets" aria-label="Stockage et services">
+    <article class="card widget">
+      <header class="widget-head"><h2>{{ icon('storage') }}Stockage</h2>
+        <span class="small muted">seuils {{ (mon.thresholds or {}).warn }} % / {{ (mon.thresholds or {}).crit }} %</span></header>
+      {% for host, hlabel in (('odooguard', 'OdooGuard'), ('odoo', 'Serveur Odoo'), ('nas', 'NAS')) %}
+      {% set disks = mon.storage|selectattr('host', 'equalto', host)|list %}
+      {% if disks %}
+      <h3 class="widget-sub">{{ hlabel }}</h3>
+      <ul class="disk-list">
+        {% for d in disks %}
+        <li class="disk disk-{{ d.level }}{% if d.stale %} stale{% endif %}">
+          <div class="disk-line"><span><strong>{{ d.label }}</strong> <span class="muted small mono">{{ d.mount }}</span></span>
+            <span class="mono small">{{ d.pct|round|int }} %</span></div>
+          <progress max="100" value="{{ d.pct }}" aria-label="{{ hlabel }} {{ d.label }} : {{ d.pct|round|int }} % occupé"></progress>
+          <div class="small muted">{{ fmt_size(d.used) }} utilisés sur {{ fmt_size(d.total) }} · {{ fmt_size(d.free) }} libres{% if d.odooguard_bytes %} · sauvegardes OdooGuard : {{ fmt_size(d.odooguard_bytes) }}{% endif %}{% if d.stale %} · <em>dernier relevé connu</em>{% endif %}</div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% endfor %}
+    </article>
+    <article class="card widget">
+      <header class="widget-head"><h2>{{ icon('monitor_heart') }}Services</h2>
+        <span class="small muted">relevé {{ fmt_time(mon.collected_at) }}</span></header>
+      {% if mon.remote_error %}<p class="banner banner-critical small" role="alert">Serveur Odoo : {{ mon.remote_error }}</p>{% endif %}
+      {% for host, hlabel in (('odoo', 'Serveur Odoo'), ('odooguard', 'OdooGuard')) %}
+      {% set svcs = mon.services|selectattr('host', 'equalto', host)|list %}
+      {% if svcs %}
+      <h3 class="widget-sub">{{ hlabel }}</h3>
+      <ul class="svc-list">
+        {% for s in svcs %}
+        <li><span>{{ badge(s.level) }}</span>
+          <span><strong class="mono">{{ s.unit|replace('.service', '') }}</strong><span class="small muted"> {{ s.description }}</span></span>
+          <span class="small muted">{{ s.active or '?' }}{% if s.sub %} ({{ s.sub }}){% endif %}{% if s.stale %} · ancien{% endif %}</span></li>
+        {% endfor %}
+      </ul>
+      {% set failed = (mon.failed_units or {}).get(host) %}
+      {% if failed %}<p class="small">Autres unités en échec : <span class="mono">{{ failed|join(', ') }}</span></p>{% endif %}
+      {% endif %}
+      {% endfor %}
+      {% if mon.security %}
+      <h3 class="widget-sub">Sécurité Odoo (24 h)</h3>
+      <p><a href="/securite"><strong>{{ mon.security.failed_24h }}</strong> connexion(s) échouée(s)</a> · {{ mon.security.ok_24h }} réussie(s)</p>
+      {% endif %}
+    </article>
+  </section>
+  {% endif %}
+
   <div class="table-wrap"><table class="components">
     <caption>Dernière sauvegarde réussie par composant</caption>
     <thead><tr><th>Composant</th><th>État</th><th>Âge</th><th>Taille</th><th>Ajouté</th><th>Durée</th><th>Détail</th></tr></thead>
     <tbody>
-    {% for c in st.components %}
+    {% for c in st.components if c.group != 'monitor' %}
       <tr class="row-{{ c.level }}">
         <th scope="row">{{ label(c) }}<div class="muted small">{{ c.name }}</div></th>
         <td>{{ badge(c.level) }}</td>

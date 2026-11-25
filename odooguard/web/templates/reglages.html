@@ -3,7 +3,7 @@
 {% block page_title %}Réglages{% endblock %}
 {% block content %}
 <div class="settings-grid">
-  <a class="card settings-card" href="/planification"><strong>{{ icon("event_repeat") }}Planification</strong><span class="muted">Quand tourne chaque type de sauvegarde, activation, prochaine exécution.</span></a>
+  <a class="card settings-card" href="/surveillance"><strong>{{ icon("monitor_heart") }}Surveillance</strong><span class="muted">Seuils d'espace disque, services surveillés, sécurité d'Odoo.</span></a>
   {% if role == 'admin' %}
   <a class="card settings-card" href="/notifications"><strong>{{ icon("mail") }}Notifications</strong><span class="muted">Serveur SMTP, bot Telegram, niveau d'alerte, message de test.</span></a>
   <a class="card settings-card" href="/utilisateurs"><strong>{{ icon("group") }}Utilisateurs</strong><span class="muted">Comptes du tableau de bord et rôles (lecteur, opérateur, admin).</span></a>

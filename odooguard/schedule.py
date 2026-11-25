@@ -42,6 +42,42 @@ SPEC_RE = re.compile(r"^[A-Za-z0-9 ,.:/*~-]{1,100}$")
 TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
 
+# ------------------------------------------------------------------ fuseau horaire
+TZ_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$")
+ZONEINFO = "/usr/share/zoneinfo"
+
+
+def current_timezone() -> str:
+    """Fuseau horaire du système OdooGuard (celui des minuteurs et de l'affichage)."""
+    try:
+        target = os.path.realpath("/etc/localtime")
+        if target.startswith(ZONEINFO + "/"):
+            return target[len(ZONEINFO) + 1:]
+    except OSError:
+        pass
+    try:
+        return open("/etc/timezone", encoding="utf-8").read().strip() or "UTC"
+    except OSError:
+        return "UTC"
+
+
+def timezones() -> list[str]:
+    try:
+        import zoneinfo
+        zones = sorted(z for z in zoneinfo.available_timezones() if "/" in z or z == "UTC")
+    except Exception:  # noqa: BLE001
+        zones = []
+    return zones or ["UTC", "Africa/Algiers", "Europe/Paris"]
+
+
+def validate_timezone(tz: str) -> str:
+    if not TZ_RE.match(tz or "") or ".." in tz:
+        raise OdooGuardError(f"fuseau horaire invalide : {tz!r}", "usage")
+    if tz not in timezones():
+        raise OdooGuardError(f"fuseau horaire inconnu : {tz}", "usage")
+    return tz
+
+
 def _oncalendar(path: str) -> list[str] | None:
     """Expressions OnCalendar d'un fichier (None si le fichier n'en définit pas)."""
     try:
@@ -118,7 +154,7 @@ def build_specs(p: dict) -> list[str]:
         if key not in INTERVALS:
             raise OdooGuardError("intervalle invalide", "usage")
         try:
-            mi = int(p.get("minute", 0))
+            mi = int(p.get("interval_minute", p.get("minute", 0)) or 0)
         except (TypeError, ValueError):
             mi = 0
         return [INTERVALS[key].format(m=max(0, min(59, mi)))]
@@ -153,6 +189,8 @@ def helper(*args: str) -> dict:
 
 def job_schedule(params: dict) -> dict:
     timer = params.get("timer")
+    if params.get("action") == "timezone":
+        timer = next(iter(TIMERS))  # sans objet : le fuseau vaut pour tous les minuteurs
     if timer not in TIMERS:
         raise OdooGuardError("minuteur inconnu", "usage")
     label = TIMERS[timer][0]
@@ -167,6 +205,13 @@ def job_schedule(params: dict) -> dict:
     if action == "reset":
         helper("reset", timer)
         return {"timer": timer, "message": f"{label} : planification d'origine rétablie"}
+    if action == "timezone":
+        tz = validate_timezone(str(params.get("timezone", "")))
+        before = current_timezone()
+        helper("timezone", tz)
+        return {"timezone": tz, "before": before,
+                "message": f"fuseau horaire : {before} → {tz} (minuteurs, journaux et tableau de bord ; "
+                           "le tableau de bord redémarre, recharger la page dans quelques secondes)"}
     if action in ("enable", "disable"):
         helper(action, timer)
         return {"timer": timer, "message": f"{label} : {'activée' if action == 'enable' else 'suspendue'}"}

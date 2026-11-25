@@ -289,3 +289,38 @@ progress::-moz-progress-bar { background: var(--secondary-container); border-rad
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 .card > h2:first-child, .card > header h2 { margin-top: 0; }
 .wizard + .wizard, .card + .card.wizard { margin-top: 16px; }
+
+/* ---------------------------------------------------------------- stockage, services */
+.widgets { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.widget { display: grid; gap: 10px; align-content: start; padding: 20px 24px; }
+.widget-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.widget-head h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 18px; line-height: 24px; }
+.widget-head .icon { color: var(--primary); }
+.widget-sub { font: 600 12px/16px var(--font-body); letter-spacing: .3px; text-transform: uppercase;
+              color: var(--on-surface-variant); margin: 8px 0 0; }
+.disk-list, .svc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.disk { display: grid; gap: 4px; }
+.disk-line { display: flex; justify-content: space-between; gap: 12px; }
+.disk progress::-webkit-progress-value { background: var(--success); }
+.disk progress::-moz-progress-bar { background: var(--success); }
+.disk-warning progress::-webkit-progress-value { background: var(--warning); }
+.disk-warning progress::-moz-progress-bar { background: var(--warning); }
+.disk-critical progress::-webkit-progress-value { background: var(--error); }
+.disk-critical progress::-moz-progress-bar { background: var(--error); }
+.disk.stale { opacity: .65; }
+.svc-list li { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; }
+.mono { font-family: var(--font-mono); font-size: 12.5px; }
+.button-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.button-row form.inline { margin: 0; }
+
+/* ---------------------------------------------------------------- planification : modes */
+.mode-block { display: grid; gap: 8px; padding: 10px 12px; border-radius: var(--radius); border: 1px solid transparent; }
+.mode-block.is-active { border-color: var(--primary-container); background: var(--surface-low); }
+.mode-block.is-off .mode-fields, fieldset.is-off { opacity: .45; }
+.mode-fields { display: grid; gap: 8px; padding-left: 24px; }
+.mode-fields.inline-fields { display: flex; }
+.mode-fields.inline-fields input[type="number"] { width: 90px; }
+.tz-card { margin-bottom: 20px; display: grid; gap: 10px; }
+.tz-card h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 18px; line-height: 24px; }
+.tz-card .icon { color: var(--primary); }
+.tz-card form { margin: 0; }
