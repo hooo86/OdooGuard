@@ -16,6 +16,7 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 
 from odooguard.config import Config
 from odooguard.remote import Agent
@@ -143,14 +144,39 @@ def mirror_path(cfg: Config, source: str) -> str:
 RSYNC_ENV = {"LC_ALL": "C.UTF-8"}
 
 
-def rsync_progress_cb(progress):
-    """Fonction de rappel : lignes « rsync --info=progress2 » -> progression."""
+def rsync_progress_cb(progress, transfer_total: int | None = None):
+    """Fonction de rappel : lignes « rsync --info=progress2 » -> progression.
+
+    ``transfer_total`` : volume réellement à transférer (essai à blanc préalable). Le
+    pourcentage est alors calculé sur ce volume : celui de rsync, rapporté au volume
+    total du dépôt, reste proche de 0 % sur une copie incrémentale.
+    """
     def on_line(line: str) -> None:
         if progress is not None:
             st = parse_rsync_progress(line)
             if st:
+                if transfer_total:
+                    st.pop("percent", None)
+                    st["bytes_total"] = transfer_total
                 progress.update(**st)
     return on_line
+
+
+def rsync_transfer_size(cmd: list[str], timeout: float = 1800) -> int | None:
+    """Volume que rsync va réellement transférer (essai à blanc, rien n'est copié)."""
+    dry = [c for c in cmd if not c.startswith("--info=")]
+    dry.insert(1, "--dry-run")
+    if "--stats" not in dry:
+        dry.insert(1, "--stats")
+    try:
+        res = run(dry, env=RSYNC_ENV, timeout=timeout, check=False)
+    except OdooGuardError:
+        return None
+    for line in res.stdout.splitlines():
+        if line.lower().startswith("total transferred file size:"):
+            num = re.sub(r"\D", "", line.split(":", 1)[1].split("bytes")[0])
+            return int(num) if num else None
+    return None
 
 
 def pull_mirror(cfg: Config, progress=None) -> dict:
@@ -171,8 +197,13 @@ def pull_mirror(cfg: Config, progress=None) -> dict:
         for ex in cfg.rsync_excludes:
             cmd.append(f"--exclude={ex}")
         cmd += [agent.rsync_source(src.rstrip("/") + "/"), dest.rstrip("/") + "/"]
+        total = None
+        if progress is not None:
+            progress.update(phase=f"1/2 analyse des changements ({i}/{n}) : {src}")
+            total = rsync_transfer_size(cmd)
+            progress.update(phase=f"1/2 synchronisation depuis server01 ({i}/{n}) : {src}")
         try:
-            res = run_streaming(cmd, rsync_progress_cb(progress), env=RSYNC_ENV, ok_codes=RSYNC_OK)
+            res = run_streaming(cmd, rsync_progress_cb(progress, total), env=RSYNC_ENV, ok_codes=RSYNC_OK)
         except OdooGuardError as exc:
             # Une source en échec (chemin absent...) n'empêche pas de sauvegarder les autres :
             # l'appelant crée quand même l'instantané, puis signale l'échec.

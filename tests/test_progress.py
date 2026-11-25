@@ -134,3 +134,15 @@ def test_backups_page_shows_progress(cfg, tmp_path, monkeypatch):
     assert 'hx-get="/partials/progress"' in html
     p.close()
     assert "Sauvegardes en cours" not in c.get("/partials/progress").text
+
+
+def test_rsync_files_progress_for_incremental_copy(tmp_path):
+    # Copie incrémentale : 0 % des octets du dépôt, mais 75 % des fichiers déjà examinés
+    line = "    493.700.000   0%  344,10kB/s    0:00:01 (xfr#4200, to-chk=5000/20000)"
+    st = progress.parse_rsync_progress(line)
+    assert st["files_done"] == 15000 and st["files_total"] == 20000
+    p = progress.Progress(str(tmp_path), "copy:nas1", "Copie vers nas1")
+    with p:
+        p.update(**st, force=True)
+        data = json.load(open(p.path))
+    assert data["percent"] == 75.0 and data["files_total"] == 20000

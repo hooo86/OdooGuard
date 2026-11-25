@@ -17,7 +17,8 @@
       <div class="progress-figures">
         <span class="kpi-small">{% if p.percent is not none %}{{ '%.1f'|format(p.percent) }} %{% else %}en cours{% endif %}</span>
         <span>Vitesse : <strong>{% if p.speed_bps %}{{ fmt_size(p.speed_bps) }}/s{% else %}—{% endif %}</strong></span>
-        <span>Traité : {% if p.bytes_done is not none %}{{ fmt_size(p.bytes_done) }}{% if p.bytes_total %} / {{ fmt_size(p.bytes_total) }}{% endif %}{% else %}—{% endif %}</span>
+        <span>Transféré : {% if p.bytes_done is not none %}{{ fmt_size(p.bytes_done) }}{% if p.bytes_total %} / {{ fmt_size(p.bytes_total) }}{% endif %}{% else %}—{% endif %}</span>
+        {% if p.files_total %}<span>Fichiers : {{ '{:,}'.format(p.files_done or 0).replace(',', ' ') }} / {{ '{:,}'.format(p.files_total).replace(',', ' ') }}</span>{% endif %}
         <span>Reste : {% if p.eta_s is not none %}≈ {{ fmt_age(p.eta_s) }}{% else %}—{% endif %}</span>
       </div>
       {% if p.stale %}<p class="small error">Aucune nouvelle depuis plus de 3 minutes : l'opération est peut-être bloquée ou interrompue (voir Historique).</p>{% endif %}

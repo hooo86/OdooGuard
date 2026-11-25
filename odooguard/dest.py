@@ -54,13 +54,17 @@ def copy_pgbackrest(cfg: Config, dest: Destination, progress=None) -> dict:
     os.makedirs(target, exist_ok=True)
     # --delete-after : les sauvegardes expirées localement sont retirées de la copie
     # seulement une fois tout le reste transféré. Pas d'ACL/propriétaire (CIFS).
-    from odooguard.files import RSYNC_ENV, rsync_progress_cb
+    from odooguard.files import RSYNC_ENV, rsync_progress_cb, rsync_transfer_size
+    cmd = ["rsync", "-rt", "--delete-after", "--stats", "--info=progress2", "--no-inc-recursive",
+           "--timeout=900", cfg.repo_path.rstrip("/") + "/", target + "/"]
+    total = None
     if progress is not None:
+        progress.update(phase=f"analyse des changements à copier vers {dest.name}")
+        total = rsync_transfer_size(cmd)
         progress.update(phase=f"copie du dépôt base vers {dest.name}")
-    res = run_streaming(["rsync", "-rt", "--delete-after", "--stats", "--info=progress2",
-                         "--no-inc-recursive", "--timeout=900",
-                         cfg.repo_path.rstrip("/") + "/", target + "/"],
-                        rsync_progress_cb(progress), env=RSYNC_ENV, timeout=6 * 3600)
+        if total == 0:
+            progress.update(percent=100.0, force=True)
+    res = run_streaming(cmd, rsync_progress_cb(progress, total), env=RSYNC_ENV, timeout=6 * 3600)
     # Contrôle : la copie doit être lisible par pgBackRest et contenir la même
     # dernière sauvegarde que le dépôt local.
     local = PgBackRest(cfg).info().last()

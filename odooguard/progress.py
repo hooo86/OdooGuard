@@ -24,7 +24,7 @@ class Progress:
         self.path = os.path.join(self.dir, re.sub(r"[^a-z0-9_.-]", "_", component.lower()) + ".json")
         self.data = {"component": component, "label": label, "started_at": time.time(),
                      "phase": "", "percent": None, "bytes_done": None, "bytes_total": None,
-                     "speed_bps": None, "eta_s": None}
+                     "speed_bps": None, "eta_s": None, "files_done": None, "files_total": None}
         self._last = (time.time(), 0)
         self._phase_start = time.time()
         self._lock = threading.Lock()
@@ -32,17 +32,26 @@ class Progress:
 
     def update(self, *, phase: str | None = None, percent: float | None = None,
                bytes_done: float | None = None, bytes_total: float | None = None,
-               speed_bps: float | None = None, eta_s: float | None = None, force: bool = False) -> None:
+               speed_bps: float | None = None, eta_s: float | None = None, files_done: int | None = None,
+               files_total: int | None = None, force: bool = False) -> None:
         with self._lock:
             now = time.time()
             if phase is not None and phase != self.data["phase"]:
                 self.data.update(phase=phase, percent=None, bytes_done=None, bytes_total=None,
-                                 speed_bps=None, eta_s=None)
+                                 speed_bps=None, eta_s=None, files_done=None, files_total=None)
                 self._last = (now, 0)
                 self._phase_start = now
                 force = True
             if bytes_total:
                 self.data["bytes_total"] = bytes_total
+            if files_total:
+                self.data["files_total"] = files_total
+                self.data["files_done"] = files_done
+                # Copie incrémentale : la plupart des fichiers sont déjà à destination ; le
+                # pourcentage d'octets de rsync (rapporté au volume total) reste alors proche
+                # de 0. La part des fichiers examinés est bien plus représentative.
+                if percent is not None and files_done is not None and not self.data["bytes_total"]:
+                    percent = max(percent, 100.0 * files_done / files_total)
             if bytes_done is not None:
                 t0, b0 = self._last
                 if speed_bps is None and now - t0 >= 5 and bytes_done >= b0:
@@ -122,6 +131,7 @@ def read_all(state_dir: str) -> list[dict]:
 # ------------------------------------------------------------------ analyse des sorties
 RSYNC_PROGRESS_RE = re.compile(
     r"^\s*(\d[\d,.'\u00a0\u202f]*)\s+(\d{1,3})%\s+([\d.,]+)([kMGT]?B)/s\s+(\d+:\d{2}:\d{2})")
+RSYNC_CHK_RE = re.compile(r"(?:to|ir)-chk=(\d+)/(\d+)")
 _UNITS = {"B": 1, "kB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
 
 
@@ -136,7 +146,13 @@ def parse_rsync_progress(line: str) -> dict | None:
     pct = float(m.group(2))
     speed = float(m.group(3).replace(",", ".")) * _UNITS.get(m.group(4), 1)
     # Pas de total déduit du pourcentage (arrondi à l'unité : trop imprécis au début)
-    return {"bytes_done": done, "percent": pct, "speed_bps": speed}
+    out = {"bytes_done": done, "percent": pct, "speed_bps": speed}
+    chk = RSYNC_CHK_RE.search(line)
+    if chk:  # « to-chk=reste/total » : fichiers restant à examiner (liste complète connue)
+        left, total = int(chk.group(1)), int(chk.group(2))
+        if total:
+            out.update(files_done=total - left, files_total=total)
+    return out
 
 
 def parse_restic_status(line: str) -> dict | None:
