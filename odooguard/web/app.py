@@ -859,7 +859,9 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         user, role, err = require(request, "lecteur")
         if err:
             return err
-        return page(request, "surveillance.html", user=user, m=fresh_cfg().monitoring, form=None, error=None)
+        c = fresh_cfg()
+        return page(request, "surveillance.html", user=user, m=c.monitoring, form=None, error=None,
+                    thresholds=threshold_rows(c), tform=None)
 
     @app.post("/surveillance/save")
     async def surveillance_save(request: Request):
@@ -874,10 +876,47 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         try:
             v = settings.validate_monitoring(params)
         except OdooGuardError as exc:
-            return page(request, "surveillance.html", user=user, m=fresh_cfg().monitoring, form=form,
-                        error=str(exc))
+            c = fresh_cfg()
+            return page(request, "surveillance.html", user=user, m=c.monitoring, form=form,
+                        error=str(exc), thresholds=threshold_rows(c), tform=None)
         v["services_local"] = ", ".join(v["services_local"])
         return queue(request, user, role, "monitoring-save", v, target="surveillance")
+
+    def threshold_rows(c: Config) -> list[dict]:
+        from odooguard import schedule, settings
+        cur = {"wal_max_lag": c.max_age["wal"], "db_any_max_age": c.max_age["db_any"],
+               "db_full_max_age": c.max_age["db_full"], "files_max_age": c.max_age["files"],
+               "copy_max_age": c.max_age["copy"]}
+        timer = {"db_any_max_age": "odooguard-backup-db-incr.timer", "db_full_max_age": "odooguard-backup-db-full.timer",
+                 "files_max_age": "odooguard-backup-files.timer", "copy_max_age": "odooguard-copy.timer"}
+        rows = []
+        for key, (lib, unit, lo, hi) in settings.THRESHOLDS.items():
+            plan = None
+            if key in timer:
+                try:
+                    t = schedule.current(timer[key])
+                    plan = ("suspendue" if not t["enabled"] else " ; ".join(t["specs"])) if t["installed"] else None
+                except Exception:  # noqa: BLE001
+                    plan = None
+            rows.append({"key": key, "label": lib, "value": f"{cur[key] / unit:g}", "min": lo, "max": hi,
+                         "plan": plan})
+        return rows
+
+    @app.post("/surveillance/seuils")
+    async def surveillance_seuils(request: Request):
+        form = dict(await request.form())
+        user, role, err = require(request, "admin", form.get("csrf", ""))
+        if err:
+            return err
+        from odooguard import settings
+        params = {k: form.get(k, "") for k in settings.THRESHOLDS}
+        try:
+            settings.validate_thresholds(params)
+        except OdooGuardError as exc:
+            c = fresh_cfg()
+            return page(request, "surveillance.html", user=user, m=c.monitoring, form=None, error=str(exc),
+                        thresholds=threshold_rows(c), tform=form)
+        return queue(request, user, role, "thresholds-save", params, target="seuils")
 
     # ---- sécurité Odoo (lecture)
     @app.get("/securite", response_class=HTMLResponse)

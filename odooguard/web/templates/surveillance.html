@@ -5,6 +5,22 @@
 {% block content %}
 {% set f = form or {} %}
 {% if error %}<p class="banner banner-critical" role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="/surveillance/seuils" class="card wizard" autocomplete="off">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <fieldset {% if role != 'admin' %}disabled{% endif %}>
+    <legend>Retard des sauvegardes : alerte critique au-delà de</legend>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Contrôle</th><th>Seuil</th><th>Planification actuelle</th></tr></thead>
+      <tbody>{% for t in thresholds %}
+        <tr><th scope="row">{{ t.label }}</th>
+          <td><input type="number" name="{{ t.key }}" value="{{ (tform or {}).get(t.key) or t.value }}" min="{{ t.min }}" max="{{ t.max }}" step="any" size="6" aria-label="{{ t.label }}"></td>
+          <td class="small">{% if t.plan %}<code>{{ t.plan }}</code>{% else %}<span class="muted">—</span>{% endif %}</td></tr>
+      {% endfor %}</tbody>
+    </table></div>
+    <p class="small muted">Avertissement à 80 % du seuil. Le seuil doit dépasser l'intervalle entre deux exécutions planifiées, plus la durée d'une exécution ; sinon le composant est en rouge entre deux passages. Exemple : copie une fois par jour → 26 h.</p>
+  </fieldset>
+  {% if role == 'admin' %}<div class="actions"><span></span><button type="submit" class="primary">Enregistrer les seuils</button></div>{% endif %}
+</form>
 <form method="post" action="/surveillance/save" class="card wizard" autocomplete="off">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <fieldset {% if role != 'admin' %}disabled{% endif %}>

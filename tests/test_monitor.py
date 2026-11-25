@@ -479,3 +479,26 @@ def test_age_message_consistent_with_level():
         assert (msg == "ok") == (lvl == "ok")
     assert _age_message("sauvegarde des fichiers", 12600, 3600) == \
         "EN RETARD : dernière sauvegarde des fichiers il y a 3 h 30 (seuil 60 min)"
+
+
+def test_thresholds_roundtrip(cfg):
+    from odooguard import config as config_mod
+    settings.job_thresholds_save(cfg, {"wal_max_lag": "10", "db_any_max_age": "2", "db_full_max_age": "8",
+                                       "files_max_age": "1", "copy_max_age": "26"})
+    m = config_mod.load(cfg.path).max_age
+    assert m == {"wal": 600, "db_any": 7200, "db_full": 8 * 86400, "files": 3600, "copy": 26 * 3600}
+    with pytest.raises(OdooGuardError):
+        settings.validate_thresholds({"wal_max_lag": "0", "db_any_max_age": "2", "db_full_max_age": "8",
+                                      "files_max_age": "1", "copy_max_age": "26"})
+
+
+def test_thresholds_form(web):
+    client, hist = web
+    ada = client("ada")
+    html = ada.get("/surveillance").text
+    assert 'name="copy_max_age"' in html
+    tok = re.search(r'name="csrf" value="([^"]+)"', html).group(1)
+    r = ada.post("/surveillance/seuils", data={"csrf": tok, "wal_max_lag": "10", "db_any_max_age": "2",
+                                               "db_full_max_age": "8", "files_max_age": "1", "copy_max_age": "26"},
+                 follow_redirects=False)
+    assert r.status_code == 303 and hist.jobs_recent(1)[0]["kind"] == "thresholds-save"

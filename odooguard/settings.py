@@ -535,3 +535,36 @@ def job_testvm_test(cfg: Config) -> dict:
     except OdooGuardError:
         drop = "ATTENTION : ALLOW_TEST_DROP=yes absent de /etc/odooguard-agent.conf sur la VM"
     return {"odoo": odoo, "message": f"{t.label or t.name} ({t.host}) joignable ; Odoo : {odoo} ; {drop}"}
+
+
+# ------------------------------------------------------------------ seuils de retard
+# clé de configuration -> (libellé, unité en secondes, minimum, maximum) ; saisie dans l'unité
+THRESHOLDS = {
+    "wal_max_lag": ("retard du flux WAL (minutes)", 60, 1, 1440),
+    "db_any_max_age": ("dernière sauvegarde de la base (heures)", 3600, 1, 720),
+    "db_full_max_age": ("dernière sauvegarde complète (jours)", 86400, 1, 90),
+    "files_max_age": ("dernière sauvegarde des fichiers (heures)", 3600, 0.25, 720),
+    "copy_max_age": ("dernière copie vers les NAS (heures)", 3600, 1, 720),
+}
+
+
+def validate_thresholds(p: dict) -> dict:
+    out = {}
+    for key, (lib, unit, lo, hi) in THRESHOLDS.items():
+        try:
+            v = float(str(p.get(key, "")).replace(",", "."))
+        except ValueError:
+            raise OdooGuardError(f"{lib} : nombre attendu", "usage") from None
+        if not lo <= v <= hi:
+            raise OdooGuardError(f"{lib} : entre {lo:g} et {hi:g}", "usage")
+        out[key] = int(round(v * unit))
+    return out
+
+
+def job_thresholds_save(cfg: Config, params: dict) -> dict:
+    v = validate_thresholds(params)
+    write_section(cfg.path, "thresholds", {k: v[k] for k in THRESHOLDS},
+                  comment="Âge maximal (secondes) avant alerte critique - modifié depuis le tableau de bord")
+    from odooguard.util import fmt_age
+    return {**v, "message": "seuils de retard enregistrés : " + ", ".join(
+        f"{THRESHOLDS[k][0].split(' (')[0]} {fmt_age(v[k])}" for k in THRESHOLDS)}
