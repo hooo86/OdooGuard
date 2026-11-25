@@ -175,7 +175,7 @@ class RestoreTester:
             title = {"ok": "test de restauration RÉUSSI", "warning": "test de restauration réussi avec réserves",
                      "critical": "test de restauration EN ÉCHEC"}[overall]
             notify.dispatch(self.cfg, overall, title, format_report(report), key="restore-test",
-                            history=self.history, force_all=True)
+                            history=self.history, force_all=True, category="test")
         return report
 
     def save(self, report: dict) -> str:

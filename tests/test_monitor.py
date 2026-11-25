@@ -321,3 +321,57 @@ def test_bases_page(web, monkeypatch):
     assert r.status_code == 303
     job = hist.jobs_recent(1)[0]
     assert job["kind"] == "databases-save" and json.loads(job["params"])["databases"] == ["LNHC_Prod_2025", "Autre"]
+
+
+# ------------------------------------------------------------------ envoi par type de notification
+def test_routes_per_category(cfg, monkeypatch):
+    from odooguard import notify
+    sent = []
+    for name, cls in notify.CHANNELS.items():
+        monkeypatch.setattr(cls, "send", lambda self, lvl, title, body, n=name: sent.append((n, title)))
+    cfg.alerts.channels = ["journal", "email", "telegram"]
+    cfg.alerts.routes = {"stockage": ["telegram"], "comptes": []}
+    assert set(notify.dispatch(cfg, "critical", "x", "b", category="stockage")) == {"journal", "telegram"}
+    assert set(notify.dispatch(cfg, "critical", "x", "b", category="comptes")) == {"journal"}
+    assert set(notify.dispatch(cfg, "critical", "x", "b", category="echec")) == {"journal", "email", "telegram"}
+    # une catégorie ne peut pas réactiver un canal désactivé globalement
+    cfg.alerts.channels = ["journal", "email"]
+    cfg.alerts.routes = {"stockage": ["telegram", "email"]}
+    assert set(notify.dispatch(cfg, "critical", "x", "b", category="stockage")) == {"journal", "email"}
+
+
+def test_alerter_one_message_per_category(cfg, monkeypatch):
+    from odooguard import notify
+    calls = []
+    monkeypatch.setattr(notify, "dispatch", lambda c, lvl, title, body, **k: calls.append((k["category"], title)) or {})
+    st = {"overall": "critical", "rpo": {}, "components": [
+        {"name": "db", "level": "critical", "message": "trop ancienne"},
+        {"name": "stockage:odoo:/", "level": "warning", "message": "85 %"},
+        {"name": "service:odoo:odoo.service", "level": "critical", "message": "failed"},
+        {"name": "securite:odoo", "level": "ok", "message": "0"}]}
+    notify.Alerter(cfg, History(cfg.history_db)).process(st)
+    assert sorted(c for c, _ in calls) == ["etat", "services", "stockage"]
+    assert ("stockage", "1 alerte(s) d'espace disque") in calls
+
+
+def test_routes_saved_and_loaded(cfg):
+    from odooguard import config as config_mod
+    p = {"min_level": "warning", "repeat_hours": "4", "routes_present": True,
+         "route_stockage_telegram": True, "route_echec_email": True, "route_echec_telegram": True}
+    settings.job_notify_save(cfg, p)
+    r = config_mod.load(cfg.path).alerts.routes
+    assert r["stockage"] == ["telegram"] and r["echec"] == ["email", "telegram"] and r["comptes"] == []
+
+
+def test_notifications_page_routes(web):
+    client, hist = web
+    ada = client("ada")
+    html = ada.get("/notifications").text
+    assert 'name="route_stockage_telegram"' in html and "Quoi envoyer" in html
+    tok = re.search(r'name="csrf" value="([^"]+)"', html).group(1)
+    r = ada.post("/notifications/save", data={"csrf": tok, "min_level": "warning", "repeat_hours": "4", "smtp_security": "starttls",
+                                               "routes_present": "1", "route_intrusion_telegram": "on"},
+                 follow_redirects=False)
+    assert r.status_code == 303, re.findall(r'role="alert">([^<]*)', r.text)
+    params = json.loads(hist.jobs_recent(1)[0]["params"])
+    assert params["route_intrusion_telegram"] is True and params["route_intrusion_email"] is False

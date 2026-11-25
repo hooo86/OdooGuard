@@ -145,7 +145,8 @@ CHANNELS = {c.name: c for c in (JournalChannel, EmailChannel, TelegramChannel)}
 
 
 def dispatch(cfg, level: str, title: str, body: str, *, key: str = "event",
-             history=None, force_all: bool = False, only: str | None = None) -> dict:
+             history=None, force_all: bool = False, only: str | None = None,
+             category: str | None = None) -> dict:
     """Envoie sur chaque canal ; un canal en panne n'empêche pas les autres.
 
     ``only`` : un seul canal (message de test d'un canal précis, même non activé).
@@ -154,6 +155,9 @@ def dispatch(cfg, level: str, title: str, body: str, *, key: str = "event",
     names = ["journal"] + [c for c in cfg.alerts.channels if c != "journal"]
     if only:
         names = [only]
+    elif category and category in cfg.alerts.routes:
+        # Réglage par type : seuls les canaux choisis pour ce type (le journal reçoit tout)
+        names = ["journal"] + [c for c in names if c != "journal" and c in cfg.alerts.routes[category]]
     min_level = LEVELS.get(cfg.alerts.min_level, 1)
     for name in names:
         cls = CHANNELS.get(name)
@@ -176,13 +180,30 @@ def dispatch(cfg, level: str, title: str, body: str, *, key: str = "event",
     return results
 
 
-def send(level: str, title: str, body: str = "", *, key: str = "event") -> dict:
+def send(level: str, title: str, body: str = "", *, key: str = "event", category: str = "echec") -> dict:
     """Alerte d'événement (échec d'une sauvegarde, d'une unité...)."""
     log.log(logging.ERROR if level == "critical" else logging.WARNING, "%s %s", title, body)
     if _cfg is None:
         JournalChannel.send(None, level, title, body)  # type: ignore[arg-type]
         return {"journal": "ok"}
-    return dispatch(_cfg, level, title, body, key=key, history=_history)
+    return dispatch(_cfg, level, title, body, key=key, history=_history, category=category)
+
+
+def category_of(component: str) -> str:
+    """Catégorie de notification d'un composant de l'état global."""
+    if component.startswith(("stockage:", "disk:")):
+        return "stockage"
+    if component.startswith(("service:", "surveillance")):
+        return "services"
+    if component.startswith("securite:"):
+        return "intrusion"
+    return "etat"
+
+
+CATEGORY_TITLE = {"etat": ("problème(s) de sauvegarde", "sauvegardes revenues à la normale"),
+                  "stockage": ("alerte(s) d'espace disque", "espace disque revenu à la normale"),
+                  "services": ("service(s) en panne", "services revenus à la normale"),
+                  "intrusion": ("alerte de sécurité Odoo", "sécurité Odoo : retour à la normale")}
 
 
 # ====================================================================== états
@@ -197,12 +218,15 @@ class Alerter:
     def process(self, status: dict) -> dict | None:
         a = self.cfg.alerts
         min_level = LEVELS.get(a.min_level, 1)
-        lines_new, lines_rem, lines_ok = [], [], []
-        worst = "ok"
+        groups: dict[str, dict] = {}
+
+        def grp(cat):
+            return groups.setdefault(cat, {"new": [], "rem": [], "ok": [], "worst": "ok"})
         for comp in status.get("components", []):
             key, level = comp["name"], comp["level"]
             if level not in LEVELS:
                 level = "warning"
+            g = grp(category_of(key))
             cur = self.history.alert_get(key)
             active = cur is not None and cur["resolved_at"] is None
             msg = (comp.get("message") or "")[:300]
@@ -210,37 +234,42 @@ class Alerter:
                 if not active or cur["level"] != level:
                     verb = "nouveau" if not active else (
                         "aggravé" if LEVELS[level] > LEVELS.get(cur["level"], 0) else "atténué")
-                    lines_new.append(f"{ICON[level]} {key} [{LEVEL_FR[level]}, {verb}] : {msg}")
+                    g["new"].append(f"{ICON[level]} {key} [{LEVEL_FR[level]}, {verb}] : {msg}")
                     self.history.alert_put(key, level=level, message=msg, last_sent=self.now,
                                            sent_count=(cur["sent_count"] + 1 if active else 1),
                                            resolved_at=None,
                                            **({} if active else {"first_seen": self.now}))
-                    worst = max(worst, level, key=LEVELS.get)
+                    g["worst"] = max(g["worst"], level, key=LEVELS.get)
                 elif self.now - (cur["last_sent"] or 0) >= a.repeat_hours * 3600:
                     since = fmt_age(self.now - cur["first_seen"])
-                    lines_rem.append(f"{ICON[level]} {key} [{LEVEL_FR[level]}, depuis {since}] : {msg}")
+                    g["rem"].append(f"{ICON[level]} {key} [{LEVEL_FR[level]}, depuis {since}] : {msg}")
                     self.history.alert_put(key, message=msg, last_sent=self.now,
                                            sent_count=cur["sent_count"] + 1)
-                    worst = max(worst, level, key=LEVELS.get)
+                    g["worst"] = max(g["worst"], level, key=LEVELS.get)
             elif active:
                 since = fmt_age(self.now - cur["first_seen"])
-                lines_ok.append(f"{ICON['ok']} {key} : résolu (problème apparu il y a {since})")
+                g["ok"].append(f"{ICON['ok']} {key} : résolu (problème apparu il y a {since})")
                 self.history.alert_put(key, level="ok", resolved_at=self.now, message=msg)
-        if not (lines_new or lines_rem or (lines_ok and a.send_resolved)):
-            return None
-        parts = []
-        if lines_new:
-            parts.append("Changements :\n" + "\n".join(lines_new))
-        if lines_rem:
-            parts.append("Toujours en cours (rappel) :\n" + "\n".join(lines_rem))
-        if lines_ok and a.send_resolved:
-            parts.append("Résolus :\n" + "\n".join(lines_ok))
-        rpo = status.get("rpo") or {}
-        parts.append(f"Perte de données max. actuelle : base {fmt_age(rpo.get('db_seconds'))}, "
-                     f"fichiers {fmt_age(rpo.get('files_seconds'))}. "
-                     f"État global : {LEVEL_FR.get(status.get('overall'), status.get('overall'))}.")
-        n_bad = len(lines_new) + len(lines_rem)
-        title = (f"{n_bad} problème(s) de sauvegarde" if n_bad else "sauvegardes revenues à la normale")
-        level = worst if n_bad else "ok"
-        return dispatch(self.cfg, level, title, "\n\n".join(parts), key="status",
-                        history=self.history)
+        results = {}
+        for cat, g in groups.items():
+            if not (g["new"] or g["rem"] or (g["ok"] and a.send_resolved)):
+                continue
+            parts = []
+            if g["new"]:
+                parts.append("Changements :\n" + "\n".join(g["new"]))
+            if g["rem"]:
+                parts.append("Toujours en cours (rappel) :\n" + "\n".join(g["rem"]))
+            if g["ok"] and a.send_resolved:
+                parts.append("Résolus :\n" + "\n".join(g["ok"]))
+            if cat == "etat":
+                rpo = status.get("rpo") or {}
+                parts.append(f"Perte de données max. actuelle : base {fmt_age(rpo.get('db_seconds'))}, "
+                             f"fichiers {fmt_age(rpo.get('files_seconds'))}. "
+                             f"État global : {LEVEL_FR.get(status.get('overall'), status.get('overall'))}.")
+            n_bad = len(g["new"]) + len(g["rem"])
+            bad_title, ok_title = CATEGORY_TITLE[cat]
+            title = f"{n_bad} {bad_title}" if n_bad else ok_title
+            results[cat] = dispatch(self.cfg, g["worst"] if n_bad else "ok", title, "\n\n".join(parts),
+                                    key="status" if cat == "etat" else f"status:{cat}",
+                                    history=self.history, category=cat)
+        return results or None

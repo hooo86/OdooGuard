@@ -119,6 +119,11 @@ min_level = warning
 repeat_hours = 4
 send_resolved = yes
 
+# Envoi par type de notification (facultatif ; absent = tous les canaux activés) :
+#   route_<type> = email, telegram | email | telegram | aucun
+#   types : echec, unite, etat, stockage, services, intrusion, comptes, test
+# route_unite = aucun
+
 [smtp]
 # [À COMPLÉTER] relais SMTP interne ou Office 365 (smtp.office365.com:587 starttls)
 host = smtp.example.lan

@@ -36,6 +36,25 @@
     <label>Proxy HTTPS (si la sortie Internet en exige un) <input name="https_proxy" value="{{ f.https_proxy if f else a.https_proxy }}" placeholder="http://proxy:3128"></label>
     <p class="small muted">Identifiant inconnu ? Ajouter le bot au groupe, y envoyer un message, puis utiliser « Trouver mes conversations » ci-dessous.</p>
   </fieldset>
+  <fieldset>
+    <legend>Quoi envoyer, et par quel canal</legend>
+    <input type="hidden" name="routes_present" value="1">
+    <div class="table-wrap"><table class="routes">
+      <thead><tr><th>Type de notification</th><th class="center">E-mail</th><th class="center">Telegram</th></tr></thead>
+      <tbody>
+      {% for cat, lib in categories.items() %}
+        {% set r = a.routes.get(cat) %}
+        <tr><th scope="row">{{ lib }}</th>
+        {% for ch in ('email', 'telegram') %}
+          {% set name = 'route_' ~ cat ~ '_' ~ ch %}
+          <td class="center"><input type="checkbox" name="{{ name }}" aria-label="{{ lib }} : {{ ch }}"
+            {% if (form and f.get(name)) or (not form and (r is none or ch in r)) %}checked{% endif %}></td>
+        {% endfor %}</tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    <p class="small muted">S'applique seulement aux canaux activés ci-dessus. Décocher les deux : le message ne va que dans le journal système (et le tableau de bord). Le niveau minimal ci-dessus s'applique à tous les types.</p>
+  </fieldset>
   <div class="actions"><span></span><button type="submit" class="primary">Enregistrer</button></div>
   <p class="small muted">Les mots de passe et jetons ne sont jamais réaffichés ni enregistrés dans l'historique.</p>
 </form>

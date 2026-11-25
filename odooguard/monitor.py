@@ -190,7 +190,7 @@ def notify_accounts(cfg: Config, history: History, events: list[dict]) -> None:
              + (f" - {e['detail']}" if e.get("detail") else "") for e in events]
     notify.dispatch(cfg, "warning", f"comptes Odoo : {len(events)} changement(s)",
                     "\n".join(lines) + "\n\nDétail : tableau de bord, page « Sécurité Odoo ».",
-                    key="odoo-accounts", history=history)
+                    key="odoo-accounts", history=history, category="comptes")
 
 
 def security_component(cfg: Config, history: History, now: float) -> dict:

@@ -30,6 +30,19 @@ def _split(value: str) -> list[str]:
     return [v.strip() for v in value.replace("\n", ",").split(",") if v.strip()]
 
 
+# Types de notification réglables séparément (e-mail / Telegram) : clé -> libellé
+NOTIFY_CATEGORIES = {
+    "echec": "Échec d'une sauvegarde, d'une copie ou du versement des WAL",
+    "unite": "Service OdooGuard en échec (journal systemd joint, double du précédent)",
+    "etat": "État des sauvegardes : retard, NAS inaccessible, copie, flux WAL, Veeam, G:\\",
+    "stockage": "Espace disque (OdooGuard, serveur Odoo, NAS)",
+    "services": "Service arrêté (Odoo, PostgreSQL, nginx, OdooGuard...)",
+    "intrusion": "Connexions Odoo échouées au-delà du seuil",
+    "comptes": "Comptes Odoo créés, supprimés, archivés",
+    "test": "Rapport du test de restauration hebdomadaire",
+}
+
+
 @dataclass
 class Target:
     """Machine sur laquelle OdooGuard sait restaurer (server01, VM de test...)."""
@@ -100,6 +113,9 @@ class AlertSettings:
     telegram_chat_ids: list[str] = field(default_factory=list)
     telegram_api: str = "https://api.telegram.org"
     https_proxy: str = ""
+    # Envoi par type de notification : catégorie -> canaux (sous-ensemble de « channels »).
+    # Absent = tous les canaux activés. Liste vide = journal système seulement.
+    routes: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -358,6 +374,10 @@ def load(path: str | None = None, *, strict_perms: bool = True) -> Config:
     a.telegram_chat_ids = _split(r.get("telegram", "chat_ids", "") or "")
     a.telegram_api = r.get("telegram", "api", a.telegram_api)
     a.https_proxy = r.get("telegram", "https_proxy", "") or ""
+    for cat in NOTIFY_CATEGORIES:
+        raw = r.get("alerts", f"route_{cat}")
+        if raw is not None:
+            a.routes[cat] = [c for c in _split(raw) if c in ("email", "telegram")]
 
     w = cfg.web
     w.listen = r.get("web", "listen", w.listen)

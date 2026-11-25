@@ -390,7 +390,7 @@ def cmd_notify_failure(ctx: Ctx) -> int:
     """Appelé par OnFailure= des unités systemd : alerte avec la fin du journal."""
     unit = ctx.args.unit
     res = run(["journalctl", "-u", unit, "-n", "25", "--no-pager", "-o", "cat"], check=False)
-    notify.send("critical", f"OdooGuard : l'unité {unit} a échoué", res.stdout[-3000:])
+    notify.send("critical", f"OdooGuard : l'unité {unit} a échoué", res.stdout[-3000:], category="unite")
     return 0
 
 

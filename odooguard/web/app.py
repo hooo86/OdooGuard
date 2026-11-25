@@ -695,7 +695,9 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         if err:
             return err
         a = fresh_cfg().alerts
+        from odooguard.config import NOTIFY_CATEGORIES
         return page(request, "notifications.html", user=user, a=a, error=None, form=None,
+                    categories=NOTIFY_CATEGORIES,
                     smtp_pw_set=secret_set(a.smtp_password_file),
                     tg_token_set=secret_set(a.telegram_token_file))
 
@@ -711,6 +713,11 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
                                                "telegram_chat_ids", "https_proxy")}
         for flag in ("use_email", "use_telegram", "send_resolved"):
             params[flag] = form.get(flag) == "on"
+        from odooguard.config import NOTIFY_CATEGORIES
+        params["routes_present"] = form.get("routes_present") == "1"
+        for cat in NOTIFY_CATEGORIES:
+            for ch in ("email", "telegram"):
+                params[f"route_{cat}_{ch}"] = form.get(f"route_{cat}_{ch}") == "on"
         a = fresh_cfg().alerts
         try:
             settings.validate_notifications(params)
@@ -720,6 +727,7 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
                 params["telegram_token_token"] = settings.stash_secret(cfg, form["telegram_token"].strip())
         except OdooGuardError as exc:
             return page(request, "notifications.html", user=user, a=a, error=str(exc), form=form,
+                        categories=NOTIFY_CATEGORIES,
                         smtp_pw_set=secret_set(a.smtp_password_file),
                         tg_token_set=secret_set(a.telegram_token_file))
         return queue(request, user, role, "notify-save", params, target="notifications")

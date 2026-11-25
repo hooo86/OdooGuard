@@ -228,7 +228,12 @@ def validate_notifications(p: dict) -> dict:
         raise OdooGuardError("e-mail activé : serveur, expéditeur et destinataires sont obligatoires", "usage")
     if "telegram" in channels and not chats:
         raise OdooGuardError("Telegram activé : au moins un identifiant de conversation", "usage")
-    return {"channels": channels, "min_level": min_level, "repeat_hours": repeat,
+    from odooguard.config import NOTIFY_CATEGORIES
+    routes = {}
+    if p.get("routes_present"):
+        for cat in NOTIFY_CATEGORIES:
+            routes[cat] = [c for c in ("email", "telegram") if p.get(f"route_{cat}_{c}")]
+    return {"routes": routes, "channels": channels, "min_level": min_level, "repeat_hours": repeat,
             "send_resolved": bool(p.get("send_resolved")), "smtp_host": host, "smtp_port": port,
             "smtp_security": security, "smtp_user": user, "mail_from": mail_from, "mail_to": mail_to,
             "telegram_chat_ids": chats, "https_proxy": proxy}
@@ -249,9 +254,12 @@ def job_notify_save(cfg: Config, params: dict) -> dict:
         write_secret_file(tg_file, token)
     if "telegram" in v["channels"] and not token and not _nonempty(tg_file):
         raise OdooGuardError("Telegram activé : jeton du bot obligatoire", "usage")
-    write_section(cfg.path, "alerts", {
-        "channels": ", ".join(v["channels"]), "min_level": v["min_level"],
-        "repeat_hours": f"{v['repeat_hours']:g}", "send_resolved": "yes" if v["send_resolved"] else "no"})
+    alerts = {"channels": ", ".join(v["channels"]), "min_level": v["min_level"],
+              "repeat_hours": f"{v['repeat_hours']:g}", "send_resolved": "yes" if v["send_resolved"] else "no"}
+    routes = v["routes"] or a.routes  # formulaire sans le tableau : réglage par type conservé
+    for cat, chans in routes.items():
+        alerts[f"route_{cat}"] = ", ".join(chans) if chans else "aucun"
+    write_section(cfg.path, "alerts", alerts)
     write_section(cfg.path, "smtp", {
         "host": v["smtp_host"], "port": v["smtp_port"], "security": v["smtp_security"],
         "user": v["smtp_user"], "password_file": smtp_pw_file, "from": v["mail_from"],
