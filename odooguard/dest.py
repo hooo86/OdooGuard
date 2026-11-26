@@ -79,10 +79,17 @@ def copy_pgbackrest(cfg: Config, dest: Destination, progress=None, verify: bool 
         progress.update(phase=f"copie du dépôt base vers {dest.name}")
         if total == 0:
             progress.update(percent=100.0, force=True)
+    import time as _time
+    t0 = _time.monotonic()
     res = run_streaming(cmd, rsync_progress_cb(progress, total), env=RSYNC_ENV, timeout=6 * 3600)
+    seconds = _time.monotonic() - t0
+    from odooguard.files import _rsync_stats
+    st = _rsync_stats(res.stdout)
+    transfer = {"bytes": st.get("total transferred file size", 0),
+                "files": st.get("number of regular files transferred", 0), "seconds": round(seconds, 1)}
     run(cmd_index, env=RSYNC_ENV, timeout=1800)
     if not verify:
-        return {"label": None, "rsync": res.stdout[-600:]}
+        return {"label": None, "rsync": res.stdout[-600:], "transfer": transfer}
     # Contrôle : la copie doit être lisible par pgBackRest et contenir la même
     # dernière sauvegarde que le dépôt local.
     local = PgBackRest(cfg).info().last()
@@ -91,7 +98,7 @@ def copy_pgbackrest(cfg: Config, dest: Destination, progress=None, verify: bool 
         raise OdooGuardError(
             f"destination {dest.name} : la copie pgBackRest ne contient pas la dernière "
             f"sauvegarde ({local.label if local else '-'})", "io")
-    return {"label": remote.label, "rsync": res.stdout[-600:]}
+    return {"label": remote.label, "rsync": res.stdout[-600:], "transfer": transfer}
 
 
 def restic_for(cfg: Config, dest: Destination) -> Restic:

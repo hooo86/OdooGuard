@@ -786,3 +786,42 @@ def test_queued_backup_shows_waiting_card(cfg, tmp_path, monkeypatch):
     assert ran == ["incr"]
     assert any("en attente : copie vers nas1 (passe finale)" in p for p in seen)
     assert progress.read_all(cfg.state_dir) == []        # carte d'attente retirée
+
+
+# ------------------------------------------------------------------ performances NAS
+def test_nas_benchmark_local(tmp_path):
+    from odooguard import nas
+    from odooguard.config import Destination
+    d = Destination(name="nas1", path=str(tmp_path))
+    b = nas.benchmark(d, size_mb=4, small_files=10)
+    assert b["write_mbps"] > 0 and b["read_mbps"] > 0 and b["files_per_s"] > 0
+    assert b["dates_kept"] is True and b["notes"] == []
+    assert list(tmp_path.iterdir()) == []                # dossier de mesure supprimé
+
+
+def test_copy_rate_drop_warns(cfg, monkeypatch):
+    from odooguard import status as status_mod
+    hist = History(cfg.history_db)
+    now = time.time()
+    for i, rate in enumerate([30e6, 32e6, 29e6, 31e6, 30e6, 5e6]):
+        hist.metric("nas_rate:nas1", rate, now - (6 - i) * 3600)
+    rid = hist.start("copy:nas1", "copy")
+    hist.finish(rid, "success")
+    monkeypatch.setattr(status_mod, "wal_state", lambda c, query_source=True: {"ok": True, "lag_seconds": 1})
+    monkeypatch.setattr("odooguard.monitor.collect", lambda *a, **k: ([], {}))
+    st = status_mod.compute(cfg, hist, query_source=False)
+    c = next(c for c in st["components"] if c["name"] == "copy:nas1")
+    assert c["level"] in ("warning", "critical") and "débit de la dernière copie" in c["message"]
+
+
+def test_nas_page_shows_perf(web):
+    client, hist = web
+    hist.kv_put("nas_bench:nas1", {"measured_at": time.time(), "size_mb": 128, "write_mbps": 31.5,
+                                   "read_mbps": 88.0, "files_per_s": 5.2, "ms_per_file": 192,
+                                   "dates_kept": False, "notes": ["dates non conservées : la copie compare les fichiers sur leur taille (déjà géré)"]})
+    rid = hist.start("copy:nas1", "copy")
+    hist.finish(rid, "success", details={"transfer": {"bytes": 140 * 2**20, "files": 32, "seconds": 20,
+                                                      "rate_bps": 7 * 2**20}})
+    html = client("lea").get("/nas").text
+    assert "31.5 Mo/s" in html and "192 ms" in html and "non conservées" in html
+    assert "140.0 Mio" in html and "7.0 Mio/s" in html

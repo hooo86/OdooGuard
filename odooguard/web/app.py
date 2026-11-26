@@ -510,8 +510,18 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         st = {c["name"]: c for c in load_status().get("components", [])}
         rows = []
         for d in fresh_cfg().destinations.values():
+            copies = []
+            for r in history.recent(30, component=f"copy:{d.name}"):
+                if r["status"] != "success":
+                    continue
+                tr = (json.loads(r.get("details") or "{}") or {}).get("transfer")
+                if tr:
+                    copies.append({"at": r["started_at"], "duration": (r["ended_at"] or 0) - r["started_at"], **tr})
+                if len(copies) >= 10:
+                    break
             rows.append({"d": d, "access": st.get(f"nas:{d.name}"), "copy_state": st.get(f"copy:{d.name}"),
-                         "managed": bool(d.share)})
+                         "managed": bool(d.share), "bench": history.kv_get(f"nas_bench:{d.name}"),
+                         "copies": copies})
         return rows
 
     @app.get("/nas", response_class=HTMLResponse)

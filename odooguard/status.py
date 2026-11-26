@@ -152,6 +152,14 @@ def compute(cfg: Config, history: History, *, query_source: bool = True) -> dict
             level = "critical" if lastrun.get("category") in ("io", "mount", "space") else max(
                 level, "warning", key=LEVELS.get)
             msg = f"dernier essai en échec ({lastrun.get('category')}) : {lastrun.get('message', '')[:300]}"
+        # Débit des copies : chute nette par rapport aux 30 derniers jours => avertissement
+        rates = [v for _, v in history.metric_series(f"nas_rate:{dest.name}", now - 30 * 86400)]
+        if len(rates) >= 5:
+            usual = sorted(rates[:-1])[len(rates[:-1]) // 2]
+            if usual > 0 and rates[-1] < 0.3 * usual:
+                level = max(level, "warning", key=LEVELS.get)
+                msg += (f" ; débit de la dernière copie {rates[-1] / 2**20:.1f} Mo/s contre "
+                        f"{usual / 2**20:.1f} Mo/s habituellement (NAS ou réseau dégradé ?)")
         comps.append(_component(f"copy:{dest.name}", level, age=age,
                                 size=ok.get("size_bytes") if ok else None,
                                 duration=(ok["ended_at"] - ok["started_at"]) if ok else None,

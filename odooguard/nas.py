@@ -134,7 +134,76 @@ def job_apply(cfg: Config, params: dict) -> dict:
             "message": f"NAS {v['name']} monté sur {values['mountpoint']}, {free:.0f} Gio libres"}
 
 
-def job_test(cfg: Config, params: dict) -> dict:
+MIB = 1024 * 1024
+
+
+def benchmark(dest: Destination, size_mb: int = 128, small_files: int = 100) -> dict:
+    """Mesure du NAS dans un dossier temporaire (supprimé ensuite).
+
+    * débit d'écriture puis de relecture d'un fichier de ``size_mb`` Mio ;
+    * temps par petit fichier, comme rsync : écriture d'un fichier temporaire, fermeture,
+      renommage ; c'est ce qui limite la copie de milliers de petits fichiers sur SMB ;
+    * conservation des dates : date imposée au fichier temporaire, puis renommage, puis
+      relecture après expiration du cache d'attributs du client (2 s).
+    """
+    import secrets
+    import shutil
+    import time
+    d = os.path.join(dest.path, f".odooguard-mesure-{secrets.token_hex(4)}")
+    os.makedirs(d)
+    out = {"measured_at": time.time(), "size_mb": size_mb, "small_files": small_files}
+    try:
+        buf = os.urandom(MIB)
+        big = os.path.join(d, "bloc.bin")
+        t = time.monotonic()
+        with open(big, "wb") as fh:
+            for _ in range(size_mb):
+                fh.write(buf)
+            fh.flush()
+            os.fsync(fh.fileno())
+        out["write_mbps"] = round(size_mb / max(time.monotonic() - t, 1e-6), 1)
+        fd = os.open(big, os.O_RDONLY)
+        try:
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)  # relire le NAS, pas le cache local
+            t = time.monotonic()
+            while os.read(fd, MIB):
+                pass
+            out["read_mbps"] = round(size_mb / max(time.monotonic() - t, 1e-6), 1)
+        finally:
+            os.close(fd)
+        payload = os.urandom(4096)
+        t = time.monotonic()
+        for i in range(small_files):
+            tmp = os.path.join(d, f".f{i}.tmp")
+            with open(tmp, "wb") as fh:
+                fh.write(payload)
+            os.rename(tmp, os.path.join(d, f"f{i}"))
+        el = max(time.monotonic() - t, 1e-6)
+        out["files_per_s"] = round(small_files / el, 1)
+        out["ms_per_file"] = round(1000 * el / small_files)
+        stamp = 1577836800  # 2020-01-01 00:00:00 UTC
+        tmp, final = os.path.join(d, ".date.tmp"), os.path.join(d, "date")
+        with open(tmp, "wb") as fh:
+            fh.write(payload)
+        os.utime(tmp, (stamp, stamp))
+        os.rename(tmp, final)
+        time.sleep(2.5)
+        out["dates_kept"] = abs(os.stat(final).st_mtime - stamp) <= 2
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    notes = []
+    if not out.get("dates_kept"):
+        notes.append("dates non conservées : la copie compare les fichiers sur leur taille (déjà géré)")
+    if out.get("ms_per_file", 0) >= 100:
+        notes.append(f"{out['ms_per_file']} ms par fichier : lent pour de nombreux petits fichiers "
+                     "(regroupement pgBackRest repo1-bundle recommandé)")
+    if out.get("write_mbps", 999) < 20:
+        notes.append(f"écriture lente ({out['write_mbps']} Mo/s) : vérifier le réseau et les disques du NAS")
+    out["notes"] = notes
+    return out
+
+
+def job_test(cfg: Config, params: dict, history=None) -> dict:
     from odooguard import dest as dest_mod
     name = str(params.get("name", ""))
     dest = cfg.destinations.get(name)
@@ -143,8 +212,15 @@ def job_test(cfg: Config, params: dict) -> dict:
     ensure_mounted(dest)
     info = dest_mod.preflight(dest)
     free = free_gb(dest.path)
-    return {"name": name, "free_gb": round(free, 1), **info,
-            "message": f"NAS {name} accessible : écriture et relecture OK, {free:.0f} Gio libres"}
+    bench = benchmark(dest)
+    if history is not None:
+        history.kv_put(f"nas_bench:{name}", bench)
+    msg = (f"NAS {name} accessible, {free:.0f} Gio libres ; écriture {bench['write_mbps']} Mo/s, "
+           f"relecture {bench['read_mbps']} Mo/s, {bench['ms_per_file']} ms par petit fichier, dates "
+           + ("conservées" if bench["dates_kept"] else "NON conservées"))
+    if bench["notes"]:
+        msg += " ; " + " ; ".join(bench["notes"])
+    return {"name": name, "free_gb": round(free, 1), **info, "benchmark": bench, "message": msg}
 
 
 def job_remove(cfg: Config, params: dict) -> dict:

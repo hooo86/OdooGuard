@@ -207,7 +207,8 @@ def run_job(cfg: Config, history: History, job: dict) -> None:
             if not can(job["role"], needed):
                 raise OdooGuardError(f"droits insuffisants (rôle {needed} requis)", "usage")
             fresh = config_mod.load(cfg.path)  # la configuration a pu changer depuis le démarrage
-            nas_action = {"nas-apply": nas.job_apply, "nas-test": nas.job_test,
+            nas_action = {"nas-apply": nas.job_apply,
+                          "nas-test": lambda c, p: nas.job_test(c, p, history),
                           "nas-remove": nas.job_remove}[job["kind"]]
             run_id = history.start(f"nas:{params.get('name', '?')}", job["kind"])
             try:

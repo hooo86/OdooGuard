@@ -124,6 +124,15 @@ def out(ctx: Ctx, data, human: str) -> None:
 _BACKUP_RANK = {"incr": 0, "diff": 1, "full": 2}
 
 
+def _sum_transfer(*parts) -> dict:
+    out = {"bytes": 0, "files": 0, "seconds": 0.0}
+    for p in parts:
+        for k in out:
+            out[k] += (p or {}).get(k) or 0
+    out["rate_bps"] = round(out["bytes"] / out["seconds"]) if out["seconds"] else None
+    return out
+
+
 @contextmanager
 def queued_lock(cfg, name: str, *, wait: float, holder: str, component: str, label: str):
     """Verrou avec file d'attente visible : tant qu'une autre opération le tient, une carte
@@ -255,7 +264,7 @@ def cmd_backup(ctx: Ctx) -> int:
                 with Progress(cfg.state_dir, f"copy:{dest.name}", f"Copie vers {dest.name}") as prog:
                     # 1. Passe principale SANS verrou : longue, mais les sauvegardes de la base
                     #    et des fichiers continuent à l'heure prévue pendant ce temps.
-                    dest_mod.copy_pgbackrest(cfg, dest, progress=prog, verify=False)
+                    main = dest_mod.copy_pgbackrest(cfg, dest, progress=prog, verify=False)
                     # 2. Passe finale sous le verrou « db » (rattrapage des derniers fichiers, quelques
                     #    minutes) : copie cohérente, contrôlée par pgBackRest.
                     prog.update(phase=f"finalisation et vérification de la copie de la base vers {dest.name}")
@@ -272,8 +281,13 @@ def cmd_backup(ctx: Ctx) -> int:
                     # Référence pour la copie hors ligne G:\ (phase 3 bis) : liste le contenu du
                     # NAS lui-même (modifié seulement par cette copie), donc sans verrou
                     man = dest_mod.write_manifest(cfg, dest, pgr["label"], rr["snapshots"])
+                transfer = _sum_transfer(main.get("transfer"), pgr.get("transfer"))
+                if transfer["bytes"] >= 50 * 2**20 and transfer["seconds"] > 0:
+                    # Débit réel des copies (assez volumineuses pour être significatives) : suivi
+                    # dans le temps, alerte si chute anormale (status.py)
+                    ctx.history.metric(f"nas_rate:{dest.name}", transfer["bytes"] / transfer["seconds"])
                 return {"label": pgr["label"], "message": "copie vérifiée", "size": man["total_bytes"],
-                        **probe, **rr, **man}
+                        "transfer": transfer, **probe, **rr, **man}
             try:
                 tracked(ctx, f"copy:{name}", "copy", job)
                 print(f"copie vers {name} OK")

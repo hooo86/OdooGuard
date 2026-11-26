@@ -39,5 +39,30 @@
   {% else %}<tr><td colspan="6" class="muted">Aucun NAS configuré.</td></tr>{% endfor %}
   </tbody>
 </table></div>
+{% for r in rows %}{% set b = r.bench %}
+<section class="card nas-perf">
+  <h2>{{ icon('hard_drive') }}Performances de {{ r.d.name }}</h2>
+  {% if b %}
+  <div class="size-grid">
+    <div class="size-item"><span class="label">Écriture</span><span class="kpi-small">{{ b.write_mbps }} Mo/s</span><span class="small muted">fichier de {{ b.size_mb }} Mio</span></div>
+    <div class="size-item"><span class="label">Relecture</span><span class="kpi-small">{{ b.read_mbps }} Mo/s</span></div>
+    <div class="size-item"><span class="label">Petits fichiers</span><span class="kpi-small">{{ b.ms_per_file }} ms</span><span class="small muted">par fichier ({{ b.files_per_s }} fichiers/s)</span></div>
+    <div class="size-item"><span class="label">Dates des fichiers</span><span class="kpi-small">{{ 'conservées' if b.dates_kept else 'non conservées' }}</span></div>
+  </div>
+  {% for n in b.notes %}<p class="small">{{ icon('warning') }} {{ n }}</p>{% endfor %}
+  <p class="small muted">Mesuré le {{ fmt_time(b.measured_at) }} (bouton « Tester »).</p>
+  {% else %}<p class="muted small">Pas encore mesuré : bouton « Tester » ci-dessus (environ 30 s).</p>{% endif %}
+  {% if r.copies %}
+  <div class="table-wrap"><table>
+    <caption>Dernières copies</caption>
+    <thead><tr><th>Date</th><th class="num">Envoyé</th><th class="num">Fichiers</th><th class="num">Durée totale</th><th class="num">Débit</th></tr></thead>
+    <tbody>{% for c in r.copies %}<tr><td class="nowrap">{{ fmt_time(c.at) }}</td><td class="num">{{ fmt_size(c.bytes) }}</td>
+      <td class="num">{{ c.files }}</td><td class="num">{{ fmt_age(c.duration) }}</td>
+      <td class="num">{{ (fmt_size(c.rate_bps) ~ '/s') if c.rate_bps and c.bytes >= 52428800 else '—' }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <p class="small muted">Débit calculé sur les copies d'au moins 50 Mio ; alerte si une copie est plus de 3 fois plus lente que d'habitude.</p>
+  {% endif %}
+</section>
+{% endfor %}
 {% if role != 'admin' %}<p class="small muted">La modification des NAS est réservée au rôle admin.</p>{% endif %}
 {% endblock %}
