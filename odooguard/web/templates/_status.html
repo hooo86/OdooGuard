@@ -10,22 +10,22 @@
     <a class="metric metric-link" href="#composants" title="Détail par composant">
       <header><span class="label">État global</span>{{ icon('shield') }}</header>
       <div class="hero-value">{{ badge(st.overall) }}</div>
-      <span class="small muted">calculé le {{ fmt_time(st.generated_at) }}</span>
+      <span class="mono small muted">calculé le {{ fmt_time(st.generated_at) }}</span>
     </a>
     <a class="metric metric-link" href="/backups#base" title="Sauvegardes de la base">
-      <header><span class="label">Perte de données max. — base</span>{{ icon('database') }}</header>
+      <header><span class="label">Perte max. — base</span>{{ icon('database') }}</header>
       <div class="kpi">{{ fmt_age(st.rpo.get('db_seconds')) }}</div>
       <span class="small muted">objectif ≤ 1 h · flux WAL continu</span>
     </a>
     <a class="metric metric-link" href="/backups#fichiers" title="Instantanés des fichiers">
-      <header><span class="label">Perte de données max. — fichiers</span><span class="accent">{{ icon('folder') }}</span></header>
+      <header><span class="label">Perte max. — fichiers</span>{{ icon('folder_open') }}</header>
       <div class="kpi">{{ fmt_age(st.rpo.get('files_seconds')) }}</div>
       <span class="small muted">objectif ≤ 1 h · filestore, modules</span>
     </a>
-    <a class="metric metric-link" href="/alerts" title="Alertes en cours">
+    <a class="metric metric-link{% if active %} metric-alert{% endif %}" href="/alerts" title="Alertes en cours">
       <header><span class="label">Alertes actives</span>{{ icon('notifications_active') }}</header>
       <div class="kpi">{{ active|length }}</div>
-      <span class="small link-text">voir le détail</span>
+      <span class="link-text">Voir le détail {{ icon('arrow_forward') }}</span>
     </a>
   </section>
 
@@ -33,95 +33,111 @@
   {% set dbc = (st.components|selectattr('name', 'equalto', 'db')|list or [{}])[0] %}
   {% set fic = (st.components|selectattr('name', 'equalto', 'files')|list or [{}])[0] %}
   {% set sizes = (mon.db_sizes or {}) %}
-  <div class="widgets-row">
-  <section class="card widget data-sizes" aria-label="Volume des données Odoo">
-    <header class="widget-head"><h2><a href="/backups">{{ icon('database') }}Données Odoo</a></h2>
-      <span class="small muted">taille actuelle sur server01</span></header>
-    <div class="size-grid">
-      {% for db, v in sizes.items() if not db.startswith('_') %}
-      <div class="size-item"><span class="label">Base {{ db }}</span><span class="kpi-small">{{ fmt_size(v.db) if v.db else '—' }}</span>
-        <span class="small muted">filestore {{ fmt_size(v.filestore) if v.filestore is not none else 'en cours de mesure' }}</span></div>
-      {% endfor %}
-      <div class="size-item"><span class="label">Instance PostgreSQL</span><span class="kpi-small">{{ fmt_size(dbc.size) if dbc.size else '—' }}</span>
-        <span class="small muted">toutes les bases</span></div>
-      <div class="size-item"><span class="label">Fichiers sauvegardés</span><span class="kpi-small">{{ fmt_size(fic.size) if fic.size else '—' }}</span>
-        <span class="small muted">filestore, modules, config</span></div>
-    </div>
-    {% if not sizes %}<p class="small muted">Taille par base : disponible après la mise à jour de l'agent sur server01.</p>{% endif %}
-  </section>
-  {% if speeds %}
-  <section class="card widget nas-speed" aria-label="Vitesse des NAS">
-    <header class="widget-head"><h2><a href="/nas">{{ icon('sync') }}Vitesse des NAS</a></h2></header>
-    <ul class="speed-list">
-    {% for n in speeds %}{% set b = n.bench %}
-      <li>
-        <div class="speed-line">
-          <span class="speed-name">{{ n.name }}</span>
-          <span class="speed-vals">
-          {% if n.last %}
-          <span class="kpi-small">{{ fmt_size(n.last[1]) }}/s</span>
-          {% if n.prev %}{% set ratio = n.last[1] / n.prev[1] if n.prev[1] else 1 %}<span class="small {{ 'error' if ratio < 0.5 else 'muted' }}" title="copie précédente">{{ '▲' if ratio >= 1.1 else ('▼' if ratio <= 0.9 else '=') }} {{ fmt_size(n.prev[1]) }}/s</span>{% endif %}
-          <span class="small muted" title="date de la dernière copie mesurée">{{ fmt_time(n.last[0])[5:16] }}</span>
-          {% else %}<span class="kpi-small muted">—</span>{% endif %}
-          </span>
+  <section class="dash-row dash-row-2" aria-label="Données et vitesse des NAS">
+    <article class="card panel">
+      <header class="panel-head">
+        <h2><a href="/backups">{{ icon('dns') }}Données Odoo</a></h2>
+        <span class="mono small muted">taille actuelle sur server01</span>
+      </header>
+      {% set n_tiles = (sizes|length) - (sizes.keys()|select('in', ['_filestore_measured_at'])|list|length) + 2 %}
+      <div class="tiles {{ 'tiles-2' if n_tiles in (2, 4) else ('tiles-3' if n_tiles in (3, 6) else '') }}">
+        {% for db, v in sizes.items() if not db.startswith('_') %}
+        <div class="tile"><span class="tile-label">Base {{ db }}</span><span class="tile-value">{{ fmt_size(v.db) if v.db else '—' }}</span>
+          <span class="mono small muted">filestore {{ fmt_size(v.filestore) if v.filestore is not none else 'en cours de mesure' }}</span></div>
+        {% endfor %}
+        <div class="tile"><span class="tile-label">Instance PostgreSQL</span><span class="tile-value">{{ fmt_size(dbc.size) if dbc.size else '—' }}</span>
+          <span class="mono small muted">toutes les bases</span></div>
+        <div class="tile"><span class="tile-label">Fichiers sauvegardés</span><span class="tile-value">{{ fmt_size(fic.size) if fic.size else '—' }}</span>
+          <span class="mono small muted">filestore, modules, config</span></div>
+      </div>
+      {% if not sizes %}<p class="small muted">Taille par base : disponible après la mise à jour de l'agent sur server01.</p>{% endif %}
+    </article>
+    {% if speeds %}
+    <article class="card panel">
+      <header class="panel-head">
+        <h2><a href="/nas">{{ icon('speed') }}Vitesse des NAS</a>{% if speeds|length == 1 %} <span class="chip mono">{{ speeds[0].name }}</span>{% endif %}</h2>
+        {% if speeds|length == 1 and role in ('operateur', 'admin') %}{% set n = speeds[0] %}
+        <form class="speed-test" hx-post="/nas/{{ n.name }}/test" hx-target="next .test-state" hx-swap="innerHTML">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit" class="icon-btn small-btn" title="Tester {{ n.name }} : écriture, relecture, petits fichiers (≈ 30 s)" aria-label="Lancer le test de {{ n.name }}" {% if n.testing %}disabled{% endif %}>{{ icon('play_arrow') }}</button>
+        </form>
+        {% endif %}
+      </header>
+      {% for n in speeds %}{% set b = n.bench %}
+      <div class="nas-block">
+        {% if speeds|length > 1 %}
+        <div class="nas-block-head"><span class="chip mono">{{ n.name }}</span>
           {% if role in ('operateur', 'admin') %}
           <form class="speed-test" hx-post="/nas/{{ n.name }}/test" hx-target="next .test-state" hx-swap="innerHTML">
             <input type="hidden" name="csrf" value="{{ csrf }}">
-            <button type="submit" class="icon-btn small-btn" title="Tester {{ n.name }} : écriture, relecture, petits fichiers (≈ 30 s)" aria-label="Tester la vitesse de {{ n.name }}" {% if n.testing %}disabled{% endif %}>{{ icon('play_arrow') }}</button>
+            <button type="submit" class="icon-btn small-btn" title="Tester {{ n.name }} (≈ 30 s)" aria-label="Lancer le test de {{ n.name }}" {% if n.testing %}disabled{% endif %}>{{ icon('play_arrow') }}</button>
           </form>
           {% endif %}
         </div>
-        <div class="test-state">{% if n.testing %}<span class="small muted">test en cours (≈ 30 s)…</span>{% elif b %}<span class="small muted">Test du {{ fmt_time(b.measured_at)[5:16] }} : écriture <strong>{{ b.write_mbps }}</strong> Mo/s · relecture <strong>{{ b.read_mbps }}</strong> Mo/s · <strong>{{ b.ms_per_file }}</strong> ms/fichier{% if b.dates_kept is defined %} · dates {{ 'conservées' if b.dates_kept else 'non conservées' }}{% endif %}</span>{% else %}<span class="small muted">pas encore testé</span>{% endif %}</div>
-      </li>
-    {% endfor %}
-    </ul>
+        {% endif %}
+        <div class="tiles tiles-3">
+          <div class="tile"><span class="tile-label">Écriture</span><span class="tile-value nowrap">{{ (b.write_mbps ~ ' Mo/s') if b else '—' }}</span></div>
+          <div class="tile"><span class="tile-label">Relecture</span><span class="tile-value nowrap">{{ (b.read_mbps ~ ' Mo/s') if b else '—' }}</span></div>
+          <div class="tile"><span class="tile-label">Latence</span><span class="tile-value nowrap">{{ (b.ms_per_file ~ ' ms') if b else '—' }}</span></div>
+        </div>
+        <p class="mono small muted test-state">{% if n.testing %}test en cours (≈ 30 s)…{% elif b %}Test du {{ fmt_time(b.measured_at)[5:16] }} · {{ b.ms_per_file }} ms/fichier{% if b.dates_kept is defined %} · dates {{ 'conservées' if b.dates_kept else 'non conservées' }}{% endif %}{% else %}pas encore testé{% endif %}{% if n.last %} · dernière copie {{ fmt_size(n.last[1]) }}/s{% if n.prev and n.prev[1] %}{% set ratio = n.last[1] / n.prev[1] %}{% if ratio >= 1.1 %} ▲{% elif ratio <= 0.9 %} <span class="{{ 'error' if ratio < 0.5 else '' }}">▼</span>{% endif %}{% endif %}{% endif %}</p>
+      </div>
+      {% endfor %}
+    </article>
+    {% endif %}
   </section>
-  {% endif %}
-  </div>
+
   {% if mon %}
-  <section class="widgets" aria-label="Stockage et services">
-    <article class="card widget">
-      <header class="widget-head"><h2><a href="/surveillance" title="Seuils d'alerte">{{ icon('storage') }}Stockage</a></h2>
-        <span class="small muted">seuils {{ (mon.thresholds or {}).warn }} % / {{ (mon.thresholds or {}).crit }} %</span></header>
+  <section class="dash-row dash-row-5-7" aria-label="Stockage et services">
+    <article class="card panel">
+      <header class="panel-head">
+        <h2><a href="/surveillance" title="Seuils d'alerte">{{ icon('hard_drive') }}Stockage</a></h2>
+        <span class="mono small muted">seuils {{ (mon.thresholds or {}).warn }} % / {{ (mon.thresholds or {}).crit }} %</span>
+      </header>
       {% for host, hlabel in (('odooguard', 'OdooGuard'), ('odoo', 'Serveur Odoo'), ('nas', 'NAS')) %}
       {% set disks = mon.storage|selectattr('host', 'equalto', host)|list %}
       {% if disks %}
-      <h3 class="widget-sub">{{ hlabel }}</h3>
-      <ul class="disk-list">
+      <div class="group">
+        <h3 class="group-title">{{ hlabel }}</h3>
         {% for d in disks %}
-        <li class="disk disk-{{ d.level }}{% if d.stale %} stale{% endif %}">
-          <div class="disk-line"><span><strong>{{ d.label }}</strong> <span class="muted small mono">{{ d.mount }}</span></span>
-            <span class="mono small">{{ d.pct|round|int }} %</span></div>
+        <div class="disk disk-{{ d.level }}{% if d.stale %} stale{% endif %}">
+          <div class="disk-line"><span class="disk-name">{{ d.label }} <span class="mono small muted">{{ d.mount }}</span></span>
+            <span class="mono">{{ d.pct|round|int }} %</span></div>
           <progress max="100" value="{{ d.pct }}" aria-label="{{ hlabel }} {{ d.label }} : {{ d.pct|round|int }} % occupé"></progress>
-          <div class="small muted">{{ fmt_size(d.used) }} utilisés sur {{ fmt_size(d.total) }} · {{ fmt_size(d.free) }} libres{% if d.odooguard_bytes %} · sauvegardes OdooGuard : {{ fmt_size(d.odooguard_bytes) }}{% endif %}{% if d.stale %} · <em>dernier relevé connu</em>{% endif %}</div>
-        </li>
+          <span class="mono small muted">{{ fmt_size(d.used) }} utilisés sur {{ fmt_size(d.total) }} · {{ fmt_size(d.free) }} libres{% if d.odooguard_bytes %} · sauvegardes OdooGuard : {{ fmt_size(d.odooguard_bytes) }}{% endif %}{% if d.stale %} · dernier relevé connu{% endif %}</span>
+        </div>
         {% endfor %}
-      </ul>
+      </div>
       {% endif %}
       {% endfor %}
     </article>
-    <article class="card widget">
-      <header class="widget-head"><h2><a href="/surveillance" title="Services surveillés">{{ icon('monitor_heart') }}Services</a></h2>
-        <span class="small muted">relevé {{ fmt_time(mon.collected_at) }}</span></header>
+    <article class="card panel">
+      <header class="panel-head">
+        <h2><a href="/surveillance" title="Services surveillés">{{ icon('monitoring') }}Services</a></h2>
+        <span class="mono small muted">relevé {{ fmt_time(mon.collected_at) }}</span>
+      </header>
       {% if mon.remote_error %}<p class="banner banner-critical small" role="alert">Serveur Odoo : {{ mon.remote_error }}</p>{% endif %}
       {% for host, hlabel in (('odoo', 'Serveur Odoo'), ('odooguard', 'OdooGuard')) %}
       {% set svcs = mon.services|selectattr('host', 'equalto', host)|list %}
       {% if svcs %}
-      <h3 class="widget-sub">{{ hlabel }}</h3>
-      <ul class="svc-list">
-        {% for s in svcs %}
-        <li><span>{{ badge(s.level) }}</span>
-          <span><strong class="mono">{{ s.unit|replace('.service', '') }}</strong><span class="small muted"> {{ s.description }}</span></span>
-          <span class="small muted">{{ s.active or '?' }}{% if s.sub %} ({{ s.sub }}){% endif %}{% if s.stale %} · ancien{% endif %}</span></li>
-        {% endfor %}
-      </ul>
-      {% set failed = (mon.failed_units or {}).get(host) %}
-      {% if failed %}<p class="small">Autres unités en échec : <span class="mono">{{ failed|join(', ') }}</span></p>{% endif %}
+      <div class="group">
+        <h3 class="group-title">{{ hlabel }}</h3>
+        <ul class="svc-list">
+          {% for s in svcs %}
+          <li><span class="svc-main">{{ badge(s.level) }}<span class="mono svc-name">{{ s.unit|replace('.service', '') }}</span><span class="small muted svc-desc">{{ s.description }}</span></span>
+            <span class="mono small muted nowrap">{{ s.active or '?' }}{% if s.sub %} ({{ s.sub }}){% endif %}{% if s.stale %} · ancien{% endif %}</span></li>
+          {% endfor %}
+        </ul>
+        {% set failed = (mon.failed_units or {}).get(host) %}
+        {% if failed %}<p class="small">Autres unités en échec : <span class="mono">{{ failed|join(', ') }}</span></p>{% endif %}
+      </div>
       {% endif %}
       {% endfor %}
       {% if mon.security %}
-      <h3 class="widget-sub">Sécurité Odoo (24 h)</h3>
-      <p><a href="/securite"><strong>{{ mon.security.failed_24h }}</strong> connexion(s) échouée(s)</a> · {{ mon.security.ok_24h }} réussie(s)</p>
+      <footer class="panel-foot">
+        <span class="group-title">Sécurité Odoo (24 h)</span>
+        <span class="small"><a href="/securite"><strong>{{ mon.security.failed_24h }}</strong> connexion(s) échouée(s)</a> · <span class="muted">{{ mon.security.ok_24h }} réussie(s)</span></span>
+      </footer>
       {% endif %}
     </article>
   </section>

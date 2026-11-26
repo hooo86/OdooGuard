@@ -250,7 +250,7 @@ def test_dashboard_widgets(web, cfg):
         json.dump(st, fh)
     html = client("lea").get("/").text
     assert "Stockage" in html and "//192.168.8.30/odoo" in html and 'value="85.0"' in html
-    assert "disk-warning" in html and "odoo</strong>" in html
+    assert "disk-warning" in html and '<span class="mono svc-name">odoo</span>' in html
     assert "stockage:odoo:/" not in html                  # pas dans le tableau des sauvegardes
     assert "3</strong> connexion(s) échouée(s)" in html
 
@@ -834,9 +834,9 @@ def test_dashboard_nas_speed_widget(web, cfg):
     hist.metric("nas_rate:nas1", 7 * 2**20, now - 3600)
     hist.kv_put("nas_bench:nas1", {"write_mbps": 31.5, "read_mbps": 88.0, "ms_per_file": 192, "measured_at": now})
     html = client("lea").get("/").text
-    assert "Vitesse des NAS" in html and "7.0 Mio/s" in html and "▼ 30.0 Mio/s" in html
+    assert "Vitesse des NAS" in html and "dernière copie 7.0 Mio/s" in html and "▼" in html
     assert html.index("Données Odoo") < html.index("Vitesse des NAS")
-    assert "écriture <strong>31.5</strong> Mo/s" in html
+    assert "31.5 Mo/s" in html and "88.0 Mo/s" in html and "192 ms" in html
     assert 'hx-post="/nas/nas1/test"' not in html                       # lecteur : pas de bouton
     assert 'hx-post="/nas/nas1/test"' in client("ada").get("/").text
     assert "Vitesse des NAS" in client("lea").get("/partials/status").text
