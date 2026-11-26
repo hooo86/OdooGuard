@@ -211,8 +211,10 @@ class Config:
     mirror_dir: str = "/srv/odooguard/mirror"
     restic_keep: dict[str, str] = field(default_factory=dict)
 
-    # Seuils de supervision (secondes)
+    # Seuils de supervision (secondes) : critique, et avertissement (None = 80 % du critique,
+    # 0 = pas d'avertissement)
     max_age: dict[str, int] = field(default_factory=dict)
+    warn_age: dict[str, int | None] = field(default_factory=dict)
 
     targets: dict[str, Target] = field(default_factory=dict)
     destinations: dict[str, Destination] = field(default_factory=dict)
@@ -375,6 +377,10 @@ def load(path: str | None = None, *, strict_perms: bool = True) -> Config:
         "files": r.int("thresholds", "files_max_age", 26 * 3600),
         "copy": r.int("thresholds", "copy_max_age", 3 * 3600),
     }
+    for k, key in (("db_any", "db_any"), ("db_full", "db_full"), ("files", "files"), ("copy", "copy"),
+                   ("restore_test", "restore_test")):
+        raw = r.get("thresholds", f"{key}_warn")
+        cfg.warn_age[k] = int(raw) if raw not in (None, "") else None
 
     a = cfg.alerts
     a.channels = _split(r.get("alerts", "channels", "journal") or "journal")

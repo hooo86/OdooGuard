@@ -561,6 +561,12 @@ THRESHOLDS = {
 }
 
 
+# Seuil d'avertissement associé (même unité) : vide = 80 % du critique, 0 = aucun
+WARN_KEYS = {"db_any_max_age": "db_any_warn", "db_full_max_age": "db_full_warn",
+             "files_max_age": "files_warn", "copy_max_age": "copy_warn",
+             "restore_test_max_age": "restore_test_warn"}
+
+
 def validate_thresholds(p: dict) -> dict:
     out = {}
     for key, (lib, unit, lo, hi) in THRESHOLDS.items():
@@ -571,22 +577,46 @@ def validate_thresholds(p: dict) -> dict:
         if not lo <= v <= hi:
             raise OdooGuardError(f"{lib} : entre {lo:g} et {hi:g}", "usage")
         out[key] = int(round(v * unit))
+        wk = WARN_KEYS.get(key)
+        if wk:
+            raw = str(p.get(wk, "")).strip().replace(",", ".")
+            if raw == "":
+                out[wk] = None
+                continue
+            try:
+                w = float(raw)
+            except ValueError:
+                raise OdooGuardError(f"{lib} : avertissement, nombre attendu (vide = 80 %, 0 = aucun)",
+                                     "usage") from None
+            if w < 0 or (w > 0 and w >= v):
+                raise OdooGuardError(f"{lib} : l'avertissement doit être inférieur au seuil critique "
+                                     f"({v:g}) ; 0 = pas d'avertissement", "usage")
+            out[wk] = int(round(w * unit))
     return out
 
 
 def job_thresholds_save(cfg: Config, params: dict) -> dict:
     v = validate_thresholds(params)
     values = {k: v[k] for k in THRESHOLDS}
+    for wk in WARN_KEYS.values():
+        if v.get(wk) is not None:
+            values[wk] = v[wk]
     with open(cfg.path, encoding="utf-8") as fh:
         has_rt_key = any(re.match(r"^\s*max_age\s*=", l) for l in _section_lines(fh.read(), "restore_test"))
     if has_rt_key:
         # [restore_test] max_age prime : c'est lui qu'on met à jour
         set_option(cfg.path, "restore_test", "max_age", str(values.pop("restore_test_max_age")))
     write_section(cfg.path, "thresholds", values,
-                  comment="Âge maximal (secondes) avant alerte critique - modifié depuis le tableau de bord")
+                  comment="Âge maximal (secondes) : critique (*_max_age) et avertissement (*_warn, 0 = aucun)")
     from odooguard.util import fmt_age
+
+    def warn_txt(k):
+        w = v.get(WARN_KEYS.get(k, ""), None)
+        if k not in WARN_KEYS:
+            return ""
+        return " (avert. " + ("aucun" if w == 0 else ("80 %" if w is None else fmt_age(w))) + ")"
     return {**v, "message": "seuils de retard enregistrés : " + ", ".join(
-        f"{THRESHOLDS[k][0].split(' (')[0]} {fmt_age(v[k])}" for k in THRESHOLDS)}
+        f"{THRESHOLDS[k][0].split(' (')[0]} {fmt_age(v[k])}{warn_txt(k)}" for k in THRESHOLDS)}
 
 
 # ------------------------------------------------------------------ rétention

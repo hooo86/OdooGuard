@@ -28,25 +28,38 @@ from odooguard.util import OdooGuardError, free_gb, io_probe
 LEVELS = {"ok": 0, "warning": 1, "critical": 2, "unknown": 1}
 
 
-def _level_for_age(age: float | None, max_age: float) -> str:
+def warn_age(cfg, key: str, max_age: float) -> float:
+    """Seuil d'avertissement réglé ([thresholds] <clé>_warn) ; 80 % du critique par défaut ;
+    0 = pas d'avertissement (infini)."""
+    v = (getattr(cfg, "warn_age", None) or {}).get(key)
+    if v is None:
+        return max_age * 0.8
+    return float("inf") if v <= 0 else min(v, max_age)
+
+
+def _level_for_age(age: float | None, max_age: float, warn: float | None = None) -> str:
+    warn = max_age * 0.8 if warn is None else warn
     if age is None:
         return "critical"
     if age > max_age:
         return "critical"
-    if age > max_age * 0.8:
+    if age > warn:
         return "warning"
     return "ok"
 
 
-def _age_message(what: str, age: float | None, max_age: float, base: str = "ok") -> str:
+def _age_message(what: str, age: float | None, max_age: float, base: str = "ok",
+                 warn: float | None = None) -> str:
     """Message cohérent avec le niveau : un retard est dit, avec le seuil."""
     from odooguard.util import fmt_age
+    warn = max_age * 0.8 if warn is None else warn
     if age is None:
         return f"aucune {what}"
     if age > max_age:
-        return f"EN RETARD : dernière {what} il y a {fmt_age(age)} (seuil {fmt_age(max_age)})"
-    if age > max_age * 0.8:
-        return f"bientôt en retard : dernière {what} il y a {fmt_age(age)} (seuil {fmt_age(max_age)})"
+        return f"EN RETARD : dernière {what} il y a {fmt_age(age)} (seuil critique {fmt_age(max_age)})"
+    if age > warn:
+        return (f"bientôt en retard : dernière {what} il y a {fmt_age(age)} "
+                f"(avertissement {fmt_age(warn)}, critique {fmt_age(max_age)})")
     return base
 
 
@@ -76,8 +89,10 @@ def compute(cfg: Config, history: History, *, query_source: bool = True) -> dict
         last_full = info.last(("full",))
         db_age = now - last.stop if last else None
         full_age = now - last_full.stop if last_full else None
-        level = max(_level_for_age(db_age, cfg.max_age["db_any"]),
-                    _level_for_age(full_age, cfg.max_age["db_full"]), key=LEVELS.get)
+        w_any = warn_age(cfg, "db_any", cfg.max_age["db_any"])
+        w_full = warn_age(cfg, "db_full", cfg.max_age["db_full"])
+        level = max(_level_for_age(db_age, cfg.max_age["db_any"], w_any),
+                    _level_for_age(full_age, cfg.max_age["db_full"], w_full), key=LEVELS.get)
         if info.status_code not in (0,):
             level = "critical"
         comps.append(_component(
@@ -90,7 +105,7 @@ def compute(cfg: Config, history: History, *, query_source: bool = True) -> dict
             message=(info.status_message if info.status_code not in (0,) else
                      _age_message("sauvegarde complète", full_age, cfg.max_age["db_full"],
                                   _age_message("sauvegarde de la base", db_age, cfg.max_age["db_any"],
-                                               info.status_message)))))
+                                               info.status_message, w_any), w_full))))
     except OdooGuardError as exc:
         comps.append(_component("db", "critical", age=None, message=str(exc)[:500]))
 
@@ -107,12 +122,14 @@ def compute(cfg: Config, history: History, *, query_source: bool = True) -> dict
             run_row = history.last("files", status="success")
             by_label = run_row if run_row and run_row.get("label") == s["short_id"][:8] else None
             comps.append(_component(
-                "files", _level_for_age(files_age, cfg.max_age["files"]), age=files_age,
+                "files", _level_for_age(files_age, cfg.max_age["files"],
+                                        warn_age(cfg, "files", cfg.max_age["files"])), age=files_age,
                 last_label=s["short_id"], size=summary.get("total_bytes_processed") or (by_label or {}).get("size_bytes"),
                 added=summary.get("data_added") if summary.get("data_added") is not None else (by_label or {}).get("added_bytes"),
                 duration=(run_row["ended_at"] - run_row["started_at"]) if run_row else None,
                 snapshots=len(snaps),
-                message=_age_message("sauvegarde des fichiers", files_age, cfg.max_age["files"])))
+                message=_age_message("sauvegarde des fichiers", files_age, cfg.max_age["files"],
+                                     warn=warn_age(cfg, "files", cfg.max_age["files"]))))
         else:
             comps.append(_component("files", "critical", age=None, message="aucun instantané"))
     except OdooGuardError as exc:
@@ -146,8 +163,10 @@ def compute(cfg: Config, history: History, *, query_source: bool = True) -> dict
         ok = history.last(f"copy:{dest.name}", status="success")
         lastrun = history.last(f"copy:{dest.name}")
         age = now - ok["ended_at"] if ok else None
-        level = _level_for_age(age, cfg.max_age["copy"])
-        msg = _age_message("copie réussie", age, cfg.max_age["copy"]) if ok else "aucune copie réussie pour l'instant"
+        w_copy = warn_age(cfg, "copy", cfg.max_age["copy"])
+        level = _level_for_age(age, cfg.max_age["copy"], w_copy)
+        msg = (_age_message("copie réussie", age, cfg.max_age["copy"], warn=w_copy) if ok
+               else "aucune copie réussie pour l'instant")
         if lastrun and lastrun["status"] == "failed":
             level = "critical" if lastrun.get("category") in ("io", "mount", "space") else max(
                 level, "warning", key=LEVELS.get)
@@ -179,7 +198,8 @@ def compute(cfg: Config, history: History, *, query_source: bool = True) -> dict
     ok_t = history.last("restore-test", status="success")
     last_t = history.last("restore-test")
     t_age = now - ok_t["ended_at"] if ok_t else None
-    t_level = _level_for_age(t_age, cfg.restore_test.max_age)
+    t_level = _level_for_age(t_age, cfg.restore_test.max_age,
+                             warn_age(cfg, "restore_test", cfg.restore_test.max_age))
     t_msg = (ok_t.get("message") or "réussi") if ok_t else "aucun test de restauration réussi"
     if last_t and last_t["status"] == "failed":
         t_level, t_msg = "critical", f"dernier test en échec : {(last_t.get('message') or '')[:300]}"

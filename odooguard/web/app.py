@@ -973,8 +973,11 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
                     plan = ("suspendue" if not t["enabled"] else " ; ".join(t["specs"])) if t["installed"] else None
                 except Exception:  # noqa: BLE001
                     plan = None
+            wk = settings.WARN_KEYS.get(key)
+            wv = c.warn_age.get(wk.replace("_warn", "")) if wk else None
             rows.append({"key": key, "label": lib, "value": f"{cur[key] / unit:g}", "min": lo, "max": hi,
-                         "plan": plan})
+                         "plan": plan, "warn_key": wk,
+                         "warn": "" if wv is None else f"{wv / unit:g}"})
         return rows
 
     @app.post("/surveillance/externes")
@@ -993,7 +996,7 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         if err:
             return err
         from odooguard import settings
-        params = {k: form.get(k, "") for k in settings.THRESHOLDS}
+        params = {k: form.get(k, "") for k in (*settings.THRESHOLDS, *settings.WARN_KEYS.values())}
         try:
             settings.validate_thresholds(params)
         except OdooGuardError as exc:

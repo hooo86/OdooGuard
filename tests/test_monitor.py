@@ -478,7 +478,7 @@ def test_age_message_consistent_with_level():
         msg = _age_message("sauvegarde des fichiers", age, 3600)
         assert (msg == "ok") == (lvl == "ok")
     assert _age_message("sauvegarde des fichiers", 12600, 3600) == \
-        "EN RETARD : dernière sauvegarde des fichiers il y a 3 h 30 (seuil 60 min)"
+        "EN RETARD : dernière sauvegarde des fichiers il y a 3 h 30 (seuil critique 60 min)"
 
 
 def test_thresholds_roundtrip(cfg):
@@ -853,3 +853,29 @@ def test_nas_test_button_htmx(web):
     assert len([j for j in hist.jobs_recent(10) if j["kind"] == "nas-test"]) == 1   # pas de doublon
     assert "test en cours" in ada.get("/partials/status").text
     assert "pas encore de copie" not in ada.get("/").text
+
+
+def test_warning_threshold_configurable(cfg):
+    from odooguard import config as config_mod
+    from odooguard import status as status_mod
+    base = {"wal_max_lag": "10", "db_any_max_age": "2", "db_full_max_age": "8", "files_max_age": "2",
+            "copy_max_age": "26", "restore_test_max_age": "8"}
+    settings.job_thresholds_save(cfg, {**base, "files_warn": "1.5", "copy_warn": "0"})
+    c = config_mod.load(cfg.path)
+    assert c.warn_age["files"] == 5400 and c.warn_age["copy"] == 0 and c.warn_age["db_any"] is None
+    # sauvegarde toutes les heures, dernière il y a 49 min : plus d'avertissement
+    w = status_mod.warn_age(c, "files", c.max_age["files"])
+    assert status_mod._level_for_age(49 * 60, c.max_age["files"], w) == "ok"
+    assert status_mod._level_for_age(100 * 60, c.max_age["files"], w) == "warning"
+    assert status_mod._level_for_age(25 * 3600, c.max_age["copy"],
+                                      status_mod.warn_age(c, "copy", c.max_age["copy"])) == "ok"   # 0 = aucun
+    assert status_mod.warn_age(c, "db_any", 7200) == 7200 * 0.8                                   # défaut 80 %
+    for bad in ({"files_warn": "3"}, {"files_warn": "-1"}):
+        with pytest.raises(OdooGuardError):
+            settings.validate_thresholds({**base, **bad})
+
+
+def test_warning_column_in_form(web):
+    client, hist = web
+    html = client("ada").get("/surveillance").text
+    assert 'name="files_warn"' in html and "Avertissement" in html and 'placeholder="80 %"' in html
