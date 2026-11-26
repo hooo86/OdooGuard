@@ -169,12 +169,42 @@ def run_streaming(cmd: Sequence[str], on_line, *, env: dict[str, str] | None = N
     return res
 
 
+class LockBusy(OdooGuardError):
+    """Verrou tenu par une autre opération (``holder`` : qui, depuis quand)."""
+
+    category = "lock"
+
+    def __init__(self, message: str, holder: dict | None = None):
+        super().__init__(message, "lock")
+        self.holder = holder or {}
+
+
+def lock_holder(lock_dir: str, name: str) -> dict:
+    """Qui tient le verrou : {"pid", "what", "since"} (lu dans le fichier du verrou)."""
+    try:
+        lines = open(os.path.join(lock_dir, f"{name}.lock"), encoding="utf-8").read().splitlines()
+    except OSError:
+        return {}
+    out = {}
+    if lines and lines[0].strip().isdigit():
+        out["pid"] = int(lines[0])
+    if len(lines) > 1:
+        out["what"] = lines[1].strip()
+    if len(lines) > 2:
+        try:
+            out["since"] = float(lines[2])
+        except ValueError:
+            pass
+    return out
+
+
 @contextmanager
-def file_lock(lock_dir: str, name: str, *, wait: float = 0) -> Iterator[None]:
+def file_lock(lock_dir: str, name: str, *, wait: float = 0, holder: str = "") -> Iterator[None]:
     """Verrou exclusif (flock) : empêche deux sauvegardes concurrentes.
 
     Le verrou est libéré automatiquement par le noyau si le processus meurt :
-    pas de verrou « orphelin » à nettoyer à la main.
+    pas de verrou « orphelin » à nettoyer à la main. Le fichier note qui le tient
+    (``holder``) et depuis quand, pour un message d'erreur explicite.
     """
     os.makedirs(lock_dir, exist_ok=True)
     path = os.path.join(lock_dir, f"{name}.lock")
@@ -189,12 +219,15 @@ def file_lock(lock_dir: str, name: str, *, wait: float = 0) -> Iterator[None]:
                 if exc.errno not in (errno.EAGAIN, errno.EACCES):
                     raise
                 if time.monotonic() >= deadline:
-                    raise OdooGuardError(
-                        f"une opération « {name} » est déjà en cours (verrou {path})", "lock"
-                    ) from None
+                    h = lock_holder(lock_dir, name)
+                    who = h.get("what") or "une autre opération"
+                    since = f" depuis {fmt_age(time.time() - h['since'])}" if h.get("since") else ""
+                    raise LockBusy(f"verrou « {name} » tenu{since} par : {who}"
+                                   + (f" (pid {h['pid']})" if h.get("pid") else ""), h) from None
                 time.sleep(2)
         os.ftruncate(fd, 0)
-        os.write(fd, f"{os.getpid()}\n".encode())
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, f"{os.getpid()}\n{holder or name}\n{time.time():.0f}\n".encode())
         yield
     finally:
         os.close(fd)

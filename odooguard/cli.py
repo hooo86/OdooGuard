@@ -28,7 +28,7 @@ from odooguard.history import History
 from odooguard.pg import PgBackRest, WalIngest
 from odooguard.progress import Progress
 from odooguard.restore import Restorer
-from odooguard.util import (OdooGuardError, check_free_space, file_lock, fmt_age,
+from odooguard.util import (LockBusy, OdooGuardError, check_free_space, file_lock, fmt_age,
                             fmt_size, fmt_time, io_probe, parse_time, run)
 
 log = logging.getLogger("odooguard")
@@ -120,6 +120,9 @@ def out(ctx: Ctx, data, human: str) -> None:
 
 
 # ====================================================================== backup
+_BACKUP_RANK = {"incr": 0, "diff": 1, "full": 2}
+
+
 def cmd_backup(ctx: Ctx) -> int:
     a = ctx.args
     cfg = ctx.cfg
@@ -153,8 +156,20 @@ def cmd_backup(ctx: Ctx) -> int:
             last = pg.info().last()
             return {"label": last.label, "size": last.size, "added": last.repo_delta,
                     "duration": last.duration}
-        with file_lock(cfg.lock_dir, "db", wait=a.wait):
-            r = tracked(ctx, "db", a.type, job)
+        try:
+            with file_lock(cfg.lock_dir, "db", wait=a.wait, holder=f"sauvegarde {a.type} de la base"):
+                r = tracked(ctx, "db", a.type, job)
+        except LockBusy as exc:
+            # Une sauvegarde de la base au moins aussi complète tourne déjà (ex. incrémentale de
+            # 01:30 pendant la différentielle de 01:00) : celle-ci serait redondante -> ignorée,
+            # sans alerte. Tout autre occupant du verrou reste une erreur, avec son nom.
+            words = (exc.holder.get("what") or "").split()  # « sauvegarde diff de la base »
+            running = _BACKUP_RANK.get(words[1], -1) if len(words) > 1 and words[-1] == "base" else -1
+            if running >= _BACKUP_RANK[a.type]:
+                log.info("sauvegarde %s ignorée : %s", a.type, exc)
+                print(f"sauvegarde base {a.type} ignorée : {exc}")
+                return 0
+            raise
         print(f"sauvegarde base {a.type} OK : {r['label']} ({fmt_size(r['added'])} ajoutés)")
     elif a.what == "files":
         def job():
@@ -179,8 +194,15 @@ def cmd_backup(ctx: Ctx) -> int:
                 raise err
             return {"label": summ["snapshot_id"][:8], "size": summ.get("total_bytes_processed"),
                     "added": summ.get("data_added"), "rsync": stats}
-        with file_lock(cfg.lock_dir, "files", wait=a.wait):
-            r = tracked(ctx, "files", "snapshot", job)
+        try:
+            with file_lock(cfg.lock_dir, "files", wait=a.wait, holder="sauvegarde des fichiers"):
+                r = tracked(ctx, "files", "snapshot", job)
+        except LockBusy as exc:
+            if exc.holder.get("what") == "sauvegarde des fichiers":
+                log.info("sauvegarde des fichiers ignorée : la précédente n'est pas finie (%s)", exc)
+                print(f"sauvegarde des fichiers ignorée : {exc}")
+                return 0
+            raise
         print(f"sauvegarde fichiers OK : instantané {r['label']} ({fmt_size(r['added'])} ajoutés)")
     elif a.what == "copy":
         names = [a.dest] if a.dest else [d.name for d in cfg.destinations.values() if d.enabled]
@@ -208,12 +230,14 @@ def cmd_backup(ctx: Ctx) -> int:
                     # 2. Passe finale sous le verrou « db » (rattrapage des derniers fichiers, quelques
                     #    minutes) : copie cohérente, contrôlée par pgBackRest.
                     prog.update(phase=f"finalisation et vérification de la copie de la base vers {dest.name}")
-                    with file_lock(cfg.lock_dir, "db", wait=3600):
+                    with file_lock(cfg.lock_dir, "db", wait=3600,
+                                   holder=f"copie vers {dest.name} (passe finale)"):
                         pgr = dest_mod.copy_pgbackrest(cfg, dest, progress=prog)
                     # 3. restic gère lui-même la concurrence (verrous non exclusifs) ; le verrou
                     #    « files » écarte seulement la maintenance (suppression d'instantanés).
                     prog.update(phase=f"copie du dépôt fichiers (restic) vers {dest.name}")
-                    with file_lock(cfg.lock_dir, "files", wait=3600):
+                    with file_lock(cfg.lock_dir, "files", wait=3600,
+                                   holder=f"copie restic vers {dest.name}"):
                         rr = dest_mod.copy_restic(cfg, dest)
                     prog.update(phase="écriture du manifeste de vérification")
                     # Référence pour la copie hors ligne G:\ (phase 3 bis) : liste le contenu du
@@ -328,7 +352,7 @@ def cmd_verify(ctx: Ctx) -> int:
                 dest_mod.restic_for(cfg, d).check(read_data_subset="10%")
             res[f"dest:{d.name}"] = "ok"
         return {"message": json.dumps(res), **res}
-    with file_lock(cfg.lock_dir, "verify", wait=0):
+    with file_lock(cfg.lock_dir, "verify", wait=0, holder="vérification des dépôts"):
         r = tracked(ctx, "verify", a.level, job)
     out(ctx, r, "\n".join(f"{k} : {v}" for k, v in r.items() if k != "message"))
     return 0
@@ -387,7 +411,7 @@ def cmd_restore(ctx: Ctx) -> int:
             rep = tracked(ctx, "restore", "cluster", lambda: r.restore_cluster(
                 target_name=a.target, when=when, force=a.force, confirm=a.confirm), alert=False)
             if cfg.target(a.target).is_production:
-                with file_lock(cfg.lock_dir, "db", wait=3600):
+                with file_lock(cfg.lock_dir, "db", wait=3600, holder="sauvegarde complète après restauration"):
                     tracked(ctx, "db", "full", lambda: (PgBackRest(cfg).backup("full"), {})[1])
         elif a.what == "files":
             if a.push:
@@ -422,7 +446,7 @@ def cmd_maintenance(ctx: Ctx) -> int:
     cfg = ctx.cfg
 
     def job():
-        with file_lock(cfg.lock_dir, "files", wait=3600):
+        with file_lock(cfg.lock_dir, "files", wait=3600, holder="maintenance (rétention restic)"):
             Restic(cfg).forget(cfg.restic_keep, prune=True)
             for d in cfg.destinations.values():
                 if d.enabled:

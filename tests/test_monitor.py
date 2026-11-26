@@ -658,7 +658,7 @@ def test_copy_holds_db_lock_only_for_final_pass(cfg, monkeypatch):
     from contextlib import contextmanager
 
     @contextmanager
-    def fake_lock(lock_dir, name, wait=0):
+    def fake_lock(lock_dir, name, wait=0, holder=""):
         held.add(name); events.append(("lock", name))
         try:
             yield
@@ -709,3 +709,29 @@ def test_copy_pgbackrest_ignores_nas_dates(cfg, tmp_path, monkeypatch):
     dest_mod.copy_pgbackrest(cfg, d, verify=False)
     assert "Number of regular files transferred: 0" in out[-1].stdout   # données non renvoyées
     assert (target / "backup/lnhc/backup.info").read_text() == "BBBB"   # index recopié
+
+
+def test_lock_names_holder_and_redundant_backup_skipped(cfg, tmp_path, monkeypatch):
+    import types
+    from odooguard import cli
+    from odooguard.util import LockBusy, file_lock
+    with file_lock(str(tmp_path), "db", holder="sauvegarde diff de la base"):
+        with pytest.raises(LockBusy) as e:
+            with file_lock(str(tmp_path), "db", wait=0):
+                pass
+        assert "sauvegarde diff de la base" in str(e.value) and e.value.holder["pid"]
+    cfg.lock_dir = str(tmp_path)
+    ran = []
+    monkeypatch.setattr(cli, "tracked", lambda *a, **k: ran.append(a[1:3]) or {"label": "L", "added": 0})
+
+    def backup(kind):
+        ctx = types.SimpleNamespace(cfg=cfg, args=types.SimpleNamespace(what="db", type=kind, wait=0), history=None)
+        return cli.cmd_backup(ctx)
+    with file_lock(str(tmp_path), "db", holder="sauvegarde diff de la base"):
+        assert backup("incr") == 0                    # redondante : ignorée, sans erreur
+        with pytest.raises(LockBusy):
+            backup("full")                            # plus complète : vraie erreur
+    with file_lock(str(tmp_path), "db", holder="copie vers nas1 (passe finale)"):
+        with pytest.raises(LockBusy, match="copie vers nas1"):
+            backup("incr")
+    assert ran == []
