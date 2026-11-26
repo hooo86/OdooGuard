@@ -836,5 +836,20 @@ def test_dashboard_nas_speed_widget(web, cfg):
     html = client("lea").get("/").text
     assert "Vitesse des NAS" in html and "7.0 Mio/s" in html and "▼ 30.0 Mio/s" in html
     assert html.index("Données Odoo") < html.index("Vitesse des NAS")
-    assert "écriture 31.5 Mo/s" in html
+    assert "écriture <strong>31.5</strong> Mo/s" in html
+    assert 'hx-post="/nas/nas1/test"' not in html                       # lecteur : pas de bouton
+    assert 'hx-post="/nas/nas1/test"' in client("ada").get("/").text
     assert "Vitesse des NAS" in client("lea").get("/partials/status").text
+
+
+def test_nas_test_button_htmx(web):
+    client, hist = web
+    ada = client("ada")
+    html = ada.get("/").text
+    tok = re.search(r'name="csrf" value="([^"]+)"', html).group(1)
+    r = ada.post("/nas/nas1/test", data={"csrf": tok}, headers={"HX-Request": "true"})
+    assert r.status_code == 200 and "test en cours" in r.text
+    r2 = ada.post("/nas/nas1/test", data={"csrf": tok}, headers={"HX-Request": "true"})
+    assert len([j for j in hist.jobs_recent(10) if j["kind"] == "nas-test"]) == 1   # pas de doublon
+    assert "test en cours" in ada.get("/partials/status").text
+    assert "pas encore de copie" not in ada.get("/").text

@@ -54,13 +54,24 @@
     <header class="widget-head"><h2><a href="/nas">{{ icon('sync') }}Vitesse des NAS</a></h2></header>
     <ul class="speed-list">
     {% for n in speeds %}{% set b = n.bench %}
-      <li title="{% if b %}Mesure du {{ fmt_time(b.measured_at) }} : écriture {{ b.write_mbps }} Mo/s, relecture {{ b.read_mbps }} Mo/s, {{ b.ms_per_file }} ms par petit fichier{% else %}Pas encore mesuré (bouton Tester, page NAS){% endif %}">
-        <span class="speed-name">{{ n.name }}</span>
-        {% if n.last %}
-        <span class="kpi-small">{{ fmt_size(n.last[1]) }}/s</span>
-        {% if n.prev %}{% set ratio = n.last[1] / n.prev[1] if n.prev[1] else 1 %}<span class="small {{ 'error' if ratio < 0.5 else 'muted' }}" aria-label="copie précédente {{ fmt_size(n.prev[1]) }}/s">{{ '▲' if ratio >= 1.1 else ('▼' if ratio <= 0.9 else '=') }} {{ fmt_size(n.prev[1]) }}/s</span>{% endif %}
-        <span class="small muted">{{ fmt_time(n.last[0])[5:16] }}</span>
-        {% else %}<span class="small muted">pas encore de copie ≥ 50 Mio</span>{% endif %}
+      <li>
+        <div class="speed-line">
+          <span class="speed-name">{{ n.name }}</span>
+          <span class="speed-vals">
+          {% if n.last %}
+          <span class="kpi-small">{{ fmt_size(n.last[1]) }}/s</span>
+          {% if n.prev %}{% set ratio = n.last[1] / n.prev[1] if n.prev[1] else 1 %}<span class="small {{ 'error' if ratio < 0.5 else 'muted' }}" title="copie précédente">{{ '▲' if ratio >= 1.1 else ('▼' if ratio <= 0.9 else '=') }} {{ fmt_size(n.prev[1]) }}/s</span>{% endif %}
+          <span class="small muted" title="date de la dernière copie mesurée">{{ fmt_time(n.last[0])[5:16] }}</span>
+          {% else %}<span class="kpi-small muted">—</span>{% endif %}
+          </span>
+          {% if role in ('operateur', 'admin') %}
+          <form class="speed-test" hx-post="/nas/{{ n.name }}/test" hx-target="next .test-state" hx-swap="innerHTML">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button type="submit" class="icon-btn small-btn" title="Tester {{ n.name }} : écriture, relecture, petits fichiers (≈ 30 s)" aria-label="Tester la vitesse de {{ n.name }}" {% if n.testing %}disabled{% endif %}>{{ icon('play_arrow') }}</button>
+          </form>
+          {% endif %}
+        </div>
+        <div class="test-state">{% if n.testing %}<span class="small muted">test en cours (≈ 30 s)…</span>{% elif b %}<span class="small muted">Test du {{ fmt_time(b.measured_at)[5:16] }} : écriture <strong>{{ b.write_mbps }}</strong> Mo/s · relecture <strong>{{ b.read_mbps }}</strong> Mo/s · <strong>{{ b.ms_per_file }}</strong> ms/fichier{% if b.dates_kept is defined %} · dates {{ 'conservées' if b.dates_kept else 'non conservées' }}{% endif %}</span>{% else %}<span class="small muted">pas encore testé</span>{% endif %}</div>
       </li>
     {% endfor %}
     </ul>

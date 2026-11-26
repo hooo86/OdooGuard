@@ -179,11 +179,14 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
     def nas_speeds() -> list[dict]:
         """Dernière vitesse de copie enregistrée et dernière mesure (bouton Tester), par NAS."""
         out = []
+        recent_jobs = history.jobs_recent(20)
         for d in fresh_cfg().destinations.values():
             if not d.enabled:
                 continue
             series = history.metric_series(f"nas_rate:{d.name}", time.time() - 90 * 86400)
-            out.append({"name": d.name, "share": d.share,
+            testing = any(j["kind"] == "nas-test" and j["status"] in ("queued", "running")
+                          and json.loads(j["params"]).get("name") == d.name for j in recent_jobs)
+            out.append({"name": d.name, "share": d.share, "testing": testing,
                         "last": series[-1] if series else None,
                         "prev": series[-2] if len(series) > 1 else None,
                         "bench": history.kv_get(f"nas_bench:{d.name}")})
@@ -611,7 +614,12 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
             return err
         if name not in fresh_cfg().destinations:
             return page(request, "error.html", user=user, message="NAS inconnu.")
-        job_id = history.job_create(user, role, "nas-test", {"name": name})
+        running = [j for j in history.jobs_recent(20) if j["kind"] == "nas-test"
+                   and j["status"] in ("queued", "running") and json.loads(j["params"]).get("name") == name]
+        job_id = running[0]["id"] if running else history.job_create(user, role, "nas-test", {"name": name})
+        if request.headers.get("HX-Request"):
+            # Bouton du tableau de bord : on reste sur la page, le résultat s'affiche à la fin du test
+            return HTMLResponse(f'<span class="small muted">test en cours (travail n°{job_id}, ≈ 30 s)…</span>')
         return RedirectResponse(f"/jobs/{job_id}", status_code=303)
 
     @app.post("/nas/{name}/enable")
