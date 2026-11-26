@@ -21,6 +21,8 @@ step() { echo; echo "==> $*"; }
 
 step "1. Code OdooGuard"
 rsync -a --delete --exclude .git --exclude tests --exclude venv "$SRC/" /opt/odooguard/
+# Version installée (affichée en bas du tableau de bord) : commit des sources
+git -C "$SRC" log -1 --format='%h du %cd' --date=format:'%Y-%m-%d %H:%M' > /opt/odooguard/BUILD 2>/dev/null || true
 cat > /usr/local/bin/odooguard-zabbix <<'EOF'
 #!/bin/sh
 # Lecture seule de /var/lib/odooguard-public/status.json (aucun secret, aucun réseau)

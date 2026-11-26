@@ -14,6 +14,8 @@ step() { echo; echo "==> $*"; }
 
 step "1. Code OdooGuard"
 rsync -a --delete --exclude .git --exclude tests --exclude venv "$SRC/" /opt/odooguard/
+# Version installée (affichée en bas du tableau de bord) : commit des sources
+git -C "$SRC" log -1 --format='%h du %cd' --date=format:'%Y-%m-%d %H:%M' > /opt/odooguard/BUILD 2>/dev/null || true
 install -d -o odooguard -g odooguard -m 750 /var/lib/odooguard/jobs /var/lib/odooguard/reports
 
 step "1 bis. Gestion des NAS depuis le tableau de bord (programme root à liste blanche)"

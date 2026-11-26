@@ -44,6 +44,15 @@ COMPONENT_FR = {
 }
 
 
+def _build() -> str:
+    """« (3f96276 du 2026-11-26 09:10) » : commit installé, écrit par les scripts d'installation."""
+    try:
+        text = (HERE.parent.parent / "BUILD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return f" ({text[:60]})" if text else ""
+
+
 def component_label(c: dict) -> str:
     n = c["name"]
     if c.get("label"):
@@ -70,7 +79,7 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
     templates = Jinja2Templates(directory=str(HERE / "templates"))
     templates.env.globals.update(fmt_age=fmt_age, fmt_size=fmt_size, fmt_time=fmt_time,
                                  LEVEL_FR=LEVEL_FR, LEVEL_ICON=LEVEL_ICON, site=cfg.site,
-                                 version=__version__, label=component_label)
+                                 version=__version__ + _build(), label=component_label)
     templates.env.filters["fromjson"] = json.loads
 
     def icon(name: str) -> Markup:
