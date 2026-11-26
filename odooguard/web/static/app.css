@@ -342,3 +342,4 @@ a.metric-link .link-text { color: var(--primary); text-decoration: underline; te
 .nas-perf { margin-top: 16px; display: grid; gap: 12px; }
 .nas-perf h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 18px; }
 .nas-perf h2 .icon { color: var(--primary); }
+.nas-speed { margin-bottom: 16px; }

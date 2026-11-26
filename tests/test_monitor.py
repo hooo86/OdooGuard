@@ -825,3 +825,15 @@ def test_nas_page_shows_perf(web):
     html = client("lea").get("/nas").text
     assert "31.5 Mo/s" in html and "192 ms" in html and "non conservées" in html
     assert "140.0 Mio" in html and "7.0 Mio/s" in html
+
+
+def test_dashboard_nas_speed_widget(web, cfg):
+    client, hist = web
+    now = time.time()
+    hist.metric("nas_rate:nas1", 30 * 2**20, now - 7200)
+    hist.metric("nas_rate:nas1", 7 * 2**20, now - 3600)
+    hist.kv_put("nas_bench:nas1", {"write_mbps": 31.5, "read_mbps": 88.0, "ms_per_file": 192, "measured_at": now})
+    html = client("lea").get("/").text
+    assert "Vitesse des NAS" in html and "7.0 Mio/s" in html and "30.0 Mio/s avant" in html
+    assert "écriture 31.5 Mo/s" in html
+    assert "Vitesse des NAS" in client("lea").get("/partials/status").text

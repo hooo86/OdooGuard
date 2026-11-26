@@ -176,6 +176,19 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         return resp
 
     # ------------------------------------------------------------ pages
+    def nas_speeds() -> list[dict]:
+        """Dernière vitesse de copie enregistrée et dernière mesure (bouton Tester), par NAS."""
+        out = []
+        for d in fresh_cfg().destinations.values():
+            if not d.enabled:
+                continue
+            series = history.metric_series(f"nas_rate:{d.name}", time.time() - 90 * 86400)
+            out.append({"name": d.name, "share": d.share,
+                        "last": series[-1] if series else None,
+                        "prev": series[-2] if len(series) > 1 else None,
+                        "bench": history.kv_get(f"nas_bench:{d.name}")})
+        return out
+
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
         user, redirect = login_required(request)
@@ -191,7 +204,7 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
                        threshold=3600, threshold_label="objectif 1 h"),
         ]
         return page(request, "dashboard.html", user=user, st=load_status(), charts=charts,
-                    runs=history.recent(15), active=history.alerts_active())
+                    runs=history.recent(15), active=history.alerts_active(), speeds=nas_speeds())
 
     @app.get("/partials/status", response_class=HTMLResponse)
     def partial_status(request: Request):
@@ -199,7 +212,7 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
         if redirect:
             return redirect
         return page(request, "_status.html", user=user, st=load_status(),
-                    active=history.alerts_active())
+                    active=history.alerts_active(), speeds=nas_speeds())
 
     @app.get("/history", response_class=HTMLResponse)
     def runs(request: Request, component: str = ""):
