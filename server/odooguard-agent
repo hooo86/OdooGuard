@@ -342,6 +342,48 @@ if os.path.isfile(users_file):
         out["users"] = json.load(fh)
 else:  # appel direct du script (tests) : JSON en argument
     out["users"] = json.loads(users_file)
+
+# ---- taille des bases (pg_database_size) et de leur filestore (du, au plus 1 fois / 6 h)
+sizes = {}
+for db, users in out["users"].items():
+    if users is None:
+        continue
+    try:
+        r = subprocess.run(["runuser", "-u", "postgres", "--", "psql", "-XAtq", "-d", db, "-c",
+                            "select pg_database_size(current_database())"],
+                           capture_output=True, text=True, timeout=60, cwd="/")
+        sizes[db] = {"db": int(r.stdout.strip())}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        sizes[db] = {"db": None}
+# Taille du filestore : « du » peut durer plusieurs minutes, il tourne en arrière-plan
+# (au plus toutes les 6 h) et ce relevé lit le dernier résultat.
+cache = "/var/lib/odooguard-export/filestore-sizes.tsv"
+running = cache + ".running"
+fs, measured = {}, None
+try:
+    measured = os.stat(cache).st_mtime
+    for line in open(cache):
+        db, _, size = line.rstrip("\n").partition("\t")
+        if size.isdigit():
+            fs[db] = int(size)
+except OSError:
+    pass
+import shlex, time as _t
+busy = os.path.exists(running) and _t.time() - os.stat(running).st_mtime < 3600
+if not busy and (measured is None or _t.time() - measured > 6 * 3600):
+    parts = [f"touch {shlex.quote(running)}", f": > {shlex.quote(cache + '.new')}"]
+    for db in sizes:
+        path = os.path.join(filestore, db)
+        parts.append(f"[ -d {shlex.quote(path)} ] && printf '%s\\t%s\\n' {shlex.quote(db)} "
+                     f"\"$(nice -n 19 ionice -c3 du -sb {shlex.quote(path)} | cut -f1)\" >> {shlex.quote(cache + '.new')}")
+    parts += [f"mv {shlex.quote(cache + '.new')} {shlex.quote(cache)}", f"rm -f {shlex.quote(running)}"]
+    os.makedirs(os.path.dirname(cache), exist_ok=True)
+    subprocess.Popen(["sh", "-c", " ; ".join(parts)], start_new_session=True, cwd="/",
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+for db in sizes:
+    sizes[db]["filestore"] = fs.get(db)
+sizes["_filestore_measured_at"] = measured
+out["db_sizes"] = sizes
 print(json.dumps(out))
 PY
     ;;

@@ -735,3 +735,54 @@ def test_lock_names_holder_and_redundant_backup_skipped(cfg, tmp_path, monkeypat
         with pytest.raises(LockBusy, match="copie vers nas1"):
             backup("incr")
     assert ran == []
+
+
+def test_dashboard_data_sizes(web, cfg):
+    client, hist = web
+    G = 1024 ** 3
+    st = {"generated_at": time.time(), "overall": "ok", "rpo": {}, "components": [
+        {"name": "db", "level": "ok", "size": int(74.7 * G)}, {"name": "files", "level": "ok", "size": int(102.9 * G)}],
+        "monitor": {"collected_at": time.time(), "storage": [], "services": [], "failed_units": {},
+                    "db_sizes": {"LNHC_Prod_2025": {"db": 80 * G, "filestore": 95 * G},
+                                 "LNHC_08_07_26": {"db": 5 * G, "filestore": None}, "_filestore_measured_at": 1}}}
+    with open(cfg.status_file, "w") as fh:
+        json.dump(st, fh)
+    html = client("lea").get("/").text
+    assert "Données Odoo" in html and "Base LNHC_Prod_2025" in html and "80.0 Gio" in html
+    assert "95.0 Gio" in html and "en cours de mesure" in html and "102.9 Gio" in html
+
+
+def test_queued_backup_shows_waiting_card(cfg, tmp_path, monkeypatch):
+    """Sauvegarde mise en file d'attente : carte visible pendant l'attente, puis exécutée."""
+    import threading
+    import types
+    from odooguard import cli, progress
+    from odooguard.util import file_lock
+    cfg.lock_dir = str(tmp_path / "locks")
+    ran = []
+    monkeypatch.setattr(cli, "tracked", lambda *a, **k: ran.append(a[2]) or {"label": "L", "added": 0})
+    seen = []
+    release = threading.Event()
+
+    def holder():
+        with file_lock(cfg.lock_dir, "db", holder="copie vers nas1 (passe finale)"):
+            release.wait(10)
+    t = threading.Thread(target=holder)
+    t.start()
+    time.sleep(0.2)
+
+    def watch():
+        for _ in range(50):
+            seen.extend(p["phase"] for p in progress.read_all(cfg.state_dir))
+            if seen:
+                break
+            time.sleep(0.1)
+        release.set()
+    w = threading.Thread(target=watch)
+    w.start()
+    ctx = types.SimpleNamespace(cfg=cfg, args=types.SimpleNamespace(what="db", type="incr", wait=30), history=None)
+    assert cli.cmd_backup(ctx) == 0
+    t.join(); w.join()
+    assert ran == ["incr"]
+    assert any("en attente : copie vers nas1 (passe finale)" in p for p in seen)
+    assert progress.read_all(cfg.state_dir) == []        # carte d'attente retirée

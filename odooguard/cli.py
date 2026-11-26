@@ -7,6 +7,7 @@ Codes de retour : 0 succès / état OK, 1 avertissement, 2 échec / critique,
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import datetime as dt
 import json
 import logging
@@ -123,6 +124,32 @@ def out(ctx: Ctx, data, human: str) -> None:
 _BACKUP_RANK = {"incr": 0, "diff": 1, "full": 2}
 
 
+@contextmanager
+def queued_lock(cfg, name: str, *, wait: float, holder: str, component: str, label: str):
+    """Verrou avec file d'attente visible : tant qu'une autre opération le tient, une carte
+    « en attente » apparaît dans « Sauvegardes en cours » au lieu d'une erreur."""
+    card = {}
+
+    def on_wait(h):
+        if "p" not in card:
+            card["p"] = Progress(cfg.state_dir, f"attente:{component}", f"{label} (en file d'attente)")
+            card["p"].__enter__()
+            card["t"] = 0.0
+        if time.time() - card["t"] >= 30:
+            since = f" depuis {fmt_age(time.time() - h['since'])}" if h.get("since") else ""
+            card["p"].update(phase=f"en attente : {h.get('what') or 'autre opération'} en cours{since}",
+                             force=True)
+            card["t"] = time.time()
+    try:
+        with file_lock(cfg.lock_dir, name, wait=wait, holder=holder, on_wait=on_wait):
+            if "p" in card:
+                card.pop("p").close()
+            yield
+    finally:
+        if "p" in card:
+            card.pop("p").close()
+
+
 def cmd_backup(ctx: Ctx) -> int:
     a = ctx.args
     cfg = ctx.cfg
@@ -157,7 +184,8 @@ def cmd_backup(ctx: Ctx) -> int:
             return {"label": last.label, "size": last.size, "added": last.repo_delta,
                     "duration": last.duration}
         try:
-            with file_lock(cfg.lock_dir, "db", wait=a.wait, holder=f"sauvegarde {a.type} de la base"):
+            with queued_lock(cfg, "db", wait=a.wait, holder=f"sauvegarde {a.type} de la base",
+                             component=f"db-{a.type}", label=f"Base : sauvegarde {_KIND_FR.get(a.type, a.type)}"):
                 r = tracked(ctx, "db", a.type, job)
         except LockBusy as exc:
             # Une sauvegarde de la base au moins aussi complète tourne déjà (ex. incrémentale de
@@ -195,7 +223,8 @@ def cmd_backup(ctx: Ctx) -> int:
             return {"label": summ["snapshot_id"][:8], "size": summ.get("total_bytes_processed"),
                     "added": summ.get("data_added"), "rsync": stats}
         try:
-            with file_lock(cfg.lock_dir, "files", wait=a.wait, holder="sauvegarde des fichiers"):
+            with queued_lock(cfg, "files", wait=a.wait, holder="sauvegarde des fichiers", component="files",
+                             label="Fichiers (filestore, modules, configuration)"):
                 r = tracked(ctx, "files", "snapshot", job)
         except LockBusy as exc:
             if exc.holder.get("what") == "sauvegarde des fichiers":
@@ -230,13 +259,13 @@ def cmd_backup(ctx: Ctx) -> int:
                     # 2. Passe finale sous le verrou « db » (rattrapage des derniers fichiers, quelques
                     #    minutes) : copie cohérente, contrôlée par pgBackRest.
                     prog.update(phase=f"finalisation et vérification de la copie de la base vers {dest.name}")
-                    with file_lock(cfg.lock_dir, "db", wait=3600,
+                    with file_lock(cfg.lock_dir, "db", wait=6 * 3600,
                                    holder=f"copie vers {dest.name} (passe finale)"):
                         pgr = dest_mod.copy_pgbackrest(cfg, dest, progress=prog)
                     # 3. restic gère lui-même la concurrence (verrous non exclusifs) ; le verrou
                     #    « files » écarte seulement la maintenance (suppression d'instantanés).
                     prog.update(phase=f"copie du dépôt fichiers (restic) vers {dest.name}")
-                    with file_lock(cfg.lock_dir, "files", wait=3600,
+                    with file_lock(cfg.lock_dir, "files", wait=6 * 3600,
                                    holder=f"copie restic vers {dest.name}"):
                         rr = dest_mod.copy_restic(cfg, dest)
                     prog.update(phase="écriture du manifeste de vérification")

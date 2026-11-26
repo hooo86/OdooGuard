@@ -11,8 +11,8 @@ User=odooguard
 Group=odooguard
 RuntimeDirectory=odooguard
 RuntimeDirectoryPreserve=yes
-ExecStart=/usr/local/bin/odooguard backup db --type=%i --wait=3600
+ExecStart=/usr/local/bin/odooguard backup db --type=%i --wait=21600
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
-TimeoutStartSec=8h
+TimeoutStartSec=12h

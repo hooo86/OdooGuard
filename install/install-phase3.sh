@@ -38,8 +38,19 @@ if ! grep -q '^\[restore_test\]' "$CONF"; then
 fi
 
 step "3. Unités systemd"
-for u in odooguard-jobs.service odooguard-restore-test.service odooguard-restore-test.timer; do
-    install -m 644 "$SRC/deploy/systemd/$u" /etc/systemd/system/
+# Tous les services (mis à jour à chaque version : temps d'attente, délais...). Les minuteurs
+# existants ne sont pas réécrits : leur planification est dans des fichiers complémentaires
+# (tableau de bord) et leur activation n'est pas modifiée.
+conf_get() { awk -F= -v sec="$1" -v key="$2" '/^\[/{s=($0=="["sec"]")} s && $1 ~ "^[ \t]*"key"[ \t]*$" {gsub(/^[ \t]+|[ \t]+$/,"",$2); print $2; exit}' "$CONF"; }
+ODOO_IP=$(conf_get odoo host); ODOO_IP=${ODOO_IP:-192.168.8.80}
+PG_VERSION=$(conf_get odoo pg_version); PG_VERSION=${PG_VERSION:-15}
+for f in "$SRC"/deploy/systemd/*.service; do
+    sed -e "s|192.168.8.80|$ODOO_IP|g" -e "s|/postgresql/15/|/postgresql/$PG_VERSION/|g" \
+        "$f" > "/etc/systemd/system/$(basename "$f")"
+    chmod 644 "/etc/systemd/system/$(basename "$f")"
+done
+for u in odooguard-restore-test.timer; do
+    [[ -f /etc/systemd/system/$u ]] || install -m 644 "$SRC/deploy/systemd/$u" /etc/systemd/system/
 done
 if systemctl daemon-reload 2>/dev/null; then
     systemctl restart odooguard-web.service || true

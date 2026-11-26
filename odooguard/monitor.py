@@ -258,6 +258,7 @@ def collect(cfg: Config, history: History, *, query_source: bool = True,
             s.update(host=ODOO_HOST, level=service_level(s))
             data["services"].append(s)
         data["failed_units"][ODOO_HOST] = remote.get("failed_units", [])
+        data["db_sizes"] = remote.get("db_sizes") or {}
         if cfg.monitoring.security:
             try:
                 process_auth(cfg, history, remote.get("auth") or {})
@@ -275,6 +276,7 @@ def collect(cfg: Config, history: History, *, query_source: bool = True,
         for s in old.get("services", []):
             if s.get("host") == ODOO_HOST:
                 data["services"].append({**s, "stale": True})
+        data["db_sizes"] = old.get("db_sizes") or {}
 
     for d in data["storage"]:
         if d.get("stale"):

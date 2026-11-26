@@ -199,7 +199,8 @@ def lock_holder(lock_dir: str, name: str) -> dict:
 
 
 @contextmanager
-def file_lock(lock_dir: str, name: str, *, wait: float = 0, holder: str = "") -> Iterator[None]:
+def file_lock(lock_dir: str, name: str, *, wait: float = 0, holder: str = "",
+              on_wait=None) -> Iterator[None]:
     """Verrou exclusif (flock) : empêche deux sauvegardes concurrentes.
 
     Le verrou est libéré automatiquement par le noyau si le processus meurt :
@@ -218,6 +219,11 @@ def file_lock(lock_dir: str, name: str, *, wait: float = 0, holder: str = "") ->
             except OSError as exc:
                 if exc.errno not in (errno.EAGAIN, errno.EACCES):
                     raise
+                if on_wait is not None:
+                    try:
+                        on_wait(lock_holder(lock_dir, name))  # mise en file d'attente visible
+                    except Exception:  # noqa: BLE001 - l'affichage ne doit jamais bloquer
+                        pass
                 if time.monotonic() >= deadline:
                     h = lock_holder(lock_dir, name)
                     who = h.get("what") or "une autre opération"

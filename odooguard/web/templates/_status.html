@@ -30,6 +30,24 @@
   </section>
 
   {% set mon = st.monitor or {} %}
+  {% set dbc = (st.components|selectattr('name', 'equalto', 'db')|list or [{}])[0] %}
+  {% set fic = (st.components|selectattr('name', 'equalto', 'files')|list or [{}])[0] %}
+  {% set sizes = (mon.db_sizes or {}) %}
+  <section class="card widget data-sizes" aria-label="Volume des données Odoo">
+    <header class="widget-head"><h2><a href="/backups">{{ icon('database') }}Données Odoo</a></h2>
+      <span class="small muted">taille actuelle sur server01</span></header>
+    <div class="size-grid">
+      {% for db, v in sizes.items() if not db.startswith('_') %}
+      <div class="size-item"><span class="label">Base {{ db }}</span><span class="kpi-small">{{ fmt_size(v.db) if v.db else '—' }}</span>
+        <span class="small muted">filestore {{ fmt_size(v.filestore) if v.filestore is not none else 'en cours de mesure' }}</span></div>
+      {% endfor %}
+      <div class="size-item"><span class="label">Instance PostgreSQL (toutes bases)</span><span class="kpi-small">{{ fmt_size(dbc.size) if dbc.size else '—' }}</span>
+        <span class="small muted">dernière sauvegarde de la base</span></div>
+      <div class="size-item"><span class="label">Fichiers sauvegardés</span><span class="kpi-small">{{ fmt_size(fic.size) if fic.size else '—' }}</span>
+        <span class="small muted">filestore, modules, configuration</span></div>
+    </div>
+    {% if not sizes %}<p class="small muted">Taille par base : disponible après la mise à jour de l'agent sur server01.</p>{% endif %}
+  </section>
   {% if mon %}
   <section class="widgets" aria-label="Stockage et services">
     <article class="card widget">
