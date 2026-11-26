@@ -878,4 +878,4 @@ def test_warning_threshold_configurable(cfg):
 def test_warning_column_in_form(web):
     client, hist = web
     html = client("ada").get("/surveillance").text
-    assert 'name="files_warn"' in html and "Avertissement" in html and 'placeholder="80 %"' in html
+    assert 'name="files_warn"' in html and "Avertissement" in html and 'placeholder="0.8"' in html and '<span class="unit">heures</span>' in html

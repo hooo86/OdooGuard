@@ -975,9 +975,12 @@ def create_app(cfg: Config, history: History | None = None) -> FastAPI:
                     plan = None
             wk = settings.WARN_KEYS.get(key)
             wv = c.warn_age.get(wk.replace("_warn", "")) if wk else None
-            rows.append({"key": key, "label": lib, "value": f"{cur[key] / unit:g}", "min": lo, "max": hi,
-                         "plan": plan, "warn_key": wk,
-                         "warn": "" if wv is None else f"{wv / unit:g}"})
+            name, _, unit_name = lib.partition(" (")
+            crit = cur[key] / unit
+            rows.append({"key": key, "label": name[:1].upper() + name[1:], "unit": unit_name.rstrip(")"),
+                         "value": f"{crit:g}", "min": lo, "max": hi, "plan": plan, "warn_key": wk,
+                         "warn": "" if wv is None else f"{wv / unit:g}",
+                         "warn_default": f"{round(crit * 0.8, 2):g}"})
         return rows
 
     @app.post("/surveillance/externes")
