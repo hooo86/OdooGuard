@@ -64,6 +64,23 @@ log()  { logger -t odooguard-agent -p daemon.info -- "$*" 2>/dev/null || true; }
 die()  { logger -t odooguard-agent -p daemon.err -- "ERREUR: $*" 2>/dev/null || true; echo "odooguard-agent: $*" >&2; exit 1; }
 json_str() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
 as_pg() { runuser -u postgres -- "$@"; }
+# Cause probable d'un arrêt de PostgreSQL pendant un chargement (sur stderr) :
+# disque plein, mémoire (OOM killer), dernières lignes graves du journal.
+pg_failure_diag() {
+    local dir free mem oom pglog
+    dir=$(as_pg psql -XAtc 'show data_directory' 2>/dev/null || echo /var/lib/postgresql)
+    free=$(df -h --output=avail,pcent "$dir" 2>/dev/null | tail -1 | awk '{print $1" libres ("$2" occupé)"}')
+    mem=$(free -h 2>/dev/null | awk '/^Mem:/{print "RAM "$2", dispo "$7} /^Swap:/{print "swap "$2}' | paste -sd";" - | sed "s/;/, /")
+    echo "diagnostic : disque PostgreSQL ${free:-?} ; ${mem:-mémoire ?}" >&2
+    if [[ "$(df --output=pcent "$dir" 2>/dev/null | tail -1 | tr -dc 0-9)" -ge 98 ]] 2>/dev/null; then
+        echo "cause probable : DISQUE PLEIN sur la machine cible ($dir)" >&2
+    fi
+    oom=$(journalctl -k --since "-6h" --no-pager -q 2>/dev/null | grep -iE "out of memory|oom-kill|killed process" | tail -2)
+    [[ -n "$oom" ]] && { echo "cause probable : MÉMOIRE INSUFFISANTE (OOM killer) :" >&2; echo "$oom" >&2; }
+    pglog=$(ls -t /var/log/postgresql/postgresql-*.log 2>/dev/null | head -1)
+    [[ -n "$pglog" ]] && grep -E "PANIC|FATAL|terminated by signal|No space left|out of memory" "$pglog" | tail -4 | sed 's/^/journal PostgreSQL : /' >&2
+    return 0
+}
 psql_q() { as_pg psql -XAtq "$@"; }
 
 log "appel : ${cmd:0:300}"
@@ -409,6 +426,7 @@ db-import)
     as_pg createdb -O "$ODOO_DB_USER" -E UTF8 -T template0 "$db"
     # pg_restore lit le flux pg_dump sur l'entrée standard
     if ! as_pg pg_restore --no-owner --no-acl --role="$ODOO_DB_USER" -d "$db"; then
+        pg_failure_diag
         die "pg_restore en erreur pour $db (base laissée en place pour diagnostic)"
     fi
     as_pg vacuumdb --analyze-only -d "$db" >/dev/null 2>&1 || true
