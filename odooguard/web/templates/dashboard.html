@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}État{% endblock %}
+{% block page_title %}État des sauvegardes{% endblock %}
+{% block page_subtitle %}Odoo de production du {{ site }} : base, fichiers, copies et contrôles, mis à jour toutes les 5 minutes.{% endblock %}
+{% block page_actions %}{% if role in ('operateur', 'admin') %}<a class="button" href="/restore">{{ icon('settings_backup_restore') }}Restaurer</a><a class="button primary" href="/backups">{{ icon('backup') }}Sauvegarder maintenant</a>{% endif %}{% endblock %}
+{% block content %}
+{% include "_status.html" %}
+<section class="charts">
+  {% for ch in charts %}{{ ch|safe }}{% endfor %}
+</section>
+<section>
+  <h2>Dernières exécutions <a class="small" href="/history">tout l'historique</a></h2>
+  {% include "_runs.html" %}
+</section>
+{% endblock %}

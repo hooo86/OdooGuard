@@ -1,0 +1,22 @@
+# Exécute les travaux demandés depuis le tableau de bord (assistant de
+# restauration, test à la demande). Le service web, cloisonné, ne fait
+# qu'enregistrer les demandes ; celui-ci les re-valide et les exécute.
+[Unit]
+Description=OdooGuard - exécution des travaux de l'assistant web
+After=network-online.target
+Wants=network-online.target
+OnFailure=odooguard-notify@%n.service
+
+[Service]
+Type=simple
+User=odooguard
+Group=odooguard
+RuntimeDirectory=odooguard
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/local/bin/odooguard jobs-worker
+Restart=always
+RestartSec=10
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

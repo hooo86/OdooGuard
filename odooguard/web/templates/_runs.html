@@ -1,0 +1,20 @@
+{% from "_badge.html" import badge %}
+<div class="table-wrap"><table>
+  <thead><tr><th>Début</th><th>Composant</th><th>Type</th><th>Résultat</th><th class="num">Durée</th><th class="num">Taille</th><th class="num">Ajouté</th><th>Message</th></tr></thead>
+  <tbody>
+  {% for r in runs %}
+    <tr>
+      <td class="nowrap">{{ fmt_time(r.started_at) }}</td>
+      <td>{{ r.component }}</td>
+      <td>{{ r.kind }}</td>
+      <td>{% if r.status == 'success' %}{{ badge('ok') }}{% elif r.status == 'running' %}<span class="badge badge-unknown">… en cours</span>{% else %}{{ badge('critical') }} <span class="small">{{ r.category or '' }}</span>{% endif %}</td>
+      <td class="num">{{ fmt_age((r.ended_at or now_ts) - r.started_at) }}</td>
+      <td class="num">{{ fmt_size(r.size_bytes) if r.size_bytes is not none else '—' }}</td>
+      <td class="num">{{ fmt_size(r.added_bytes) if r.added_bytes is not none else '—' }}</td>
+      <td class="msg">{{ (r.message or '')[:200] }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8" class="muted">Aucune exécution.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>

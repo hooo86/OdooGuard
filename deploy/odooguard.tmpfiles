@@ -1,0 +1,2 @@
+# /etc/tmpfiles.d/odooguard.conf
+d /run/odooguard 0750 odooguard odooguard -

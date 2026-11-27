@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}OdooGuard{% endblock %} · OdooGuard {{ site }}</title>
+  <script src="/static/theme.js"></script>
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
+  <script src="/static/htmx-1.9.12.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+{% if user %}
+{% set path = request.url.path %}
+{% set section = path.split('/')[1] %}
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-top">
+      <a class="brand" href="/" aria-label="OdooGuard - accueil">
+        <img src="/static/logo-mark.svg" alt="" width="34" height="38">
+        <span><span class="wordmark"><span class="wm-odoo">Odoo</span><span class="wm-guard">Guard</span></span>
+        <span class="brand-site">{{ site }}</span></span>
+      </a>
+      <nav class="nav" aria-label="Navigation principale">
+        <a href="/" {% if path == '/' %}aria-current="page"{% endif %}><span>{{ icon('dashboard') }}État</span></a>
+        <a href="/backups" {% if section == 'backups' %}aria-current="page"{% endif %}><span>{{ icon('backup') }}Sauvegardes</span></a>
+        <a href="/history" {% if section == 'history' %}aria-current="page"{% endif %}><span>{{ icon('history') }}Historique</span></a>
+        <a href="/planification" {% if section == 'planification' %}aria-current="page"{% endif %}><span>{{ icon('event_repeat') }}Planification</span></a>
+        <a href="/restore-tests" {% if section == 'restore-tests' %}aria-current="page"{% endif %}><span>{{ icon('fact_check') }}Tests de restauration</span></a>
+        {% if role in ('operateur', 'admin') %}
+        <a href="/restore" {% if section in ('restore', 'jobs') %}aria-current="page"{% endif %}><span>{{ icon('settings_backup_restore') }}Restaurer</span></a>
+        {% endif %}
+        <a href="/alerts" {% if section == 'alerts' %}aria-current="page"{% endif %}><span>{{ icon('notifications_active') }}Alertes</span>{% if alerts_count %}<span class="nav-badge" role="status" aria-label="{{ alerts_count }} alerte(s) active(s)">{{ alerts_count }}</span>{% endif %}</a>
+        <a href="/securite" {% if section == 'securite' %}aria-current="page"{% endif %}><span>{{ icon('security') }}Sécurité Odoo</span></a>
+        <a href="/audit" {% if section == 'audit' %}aria-current="page"{% endif %}><span>{{ icon('receipt_long') }}Audit</span></a>
+        <a href="/reglages" {% if section in ('reglages', 'nas', 'notifications', 'utilisateurs', 'surveillance', 'bases', 'vm-test', 'retention') %}aria-current="page"{% endif %}><span>{{ icon('settings') }}Réglages</span></a>
+      </nav>
+    </div>
+    <div class="sidebar-foot">
+      <div class="avatar" aria-hidden="true">{{ user[:2] }}</div>
+      <div class="who">
+        <p><strong>{{ user }}</strong></p>
+        <p class="small muted">{{ {'lecteur': 'Lecteur', 'operateur': 'Opérateur', 'admin': 'Administrateur'}.get(role, role) }}</p>
+      </div>
+      <button id="theme-toggle" type="button" class="icon-btn" aria-label="Basculer entre mode clair et mode sombre" title="Mode clair / sombre">{{ icon('dark_mode') }}</button>
+      <form method="post" action="/logout"><button type="submit" class="icon-btn" aria-label="Déconnexion" title="Déconnexion">{{ icon('logout') }}</button></form>
+    </div>
+  </aside>
+  <div class="main-col">
+    <header class="page-header">
+      <div class="page-header-inner">
+        <div>
+          <h1>{% block page_title %}{% endblock %}</h1>
+          <p class="page-subtitle">{% block page_subtitle %}{% endblock %}</p>
+        </div>
+        <div class="page-actions">{% block page_actions %}{% endblock %}</div>
+      </div>
+    </header>
+    <main>
+{% block content %}{% endblock %}
+    </main>
+    <footer>OdooGuard {{ version }} · les restaurations sont exécutées par le service odooguard-jobs et tracées dans le journal d'audit</footer>
+  </div>
+</div>
+{% else %}
+{% block anonymous %}{% endblock %}
+{% endif %}
+</body>
+</html>

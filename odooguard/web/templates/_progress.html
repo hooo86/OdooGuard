@@ -1,0 +1,29 @@
+<section id="progress" hx-get="/partials/progress" hx-trigger="every 3s" hx-swap="outerHTML">
+  {% if progress %}
+  <h2>Sauvegardes en cours</h2>
+  <div class="progress-list">
+  {% for p in progress %}
+    <div class="card progress-card">
+      <div class="progress-head">
+        <strong>{{ p.label }}</strong>
+        <span class="muted small">démarrée il y a {{ fmt_age(p.elapsed_s) }}</span>
+      </div>
+      <div class="muted small">{{ p.phase or "démarrage" }}</div>
+      {% if p.percent is not none %}
+      <progress max="100" value="{{ '%.1f'|format(p.percent) }}" aria-label="{{ p.label }}">{{ '%.0f'|format(p.percent) }} %</progress>
+      {% else %}
+      <progress aria-label="{{ p.label }} : étape sans mesure de progression"></progress>
+      {% endif %}
+      <div class="progress-figures">
+        <span class="kpi-small">{% if p.percent is not none %}{{ '%.1f'|format(p.percent) }} %{% else %}en cours{% endif %}</span>
+        <span>Vitesse : <strong>{% if p.speed_bps %}{{ fmt_size(p.speed_bps) }}/s{% else %}—{% endif %}</strong></span>
+        <span>Transféré : {% if p.bytes_done is not none %}{{ fmt_size(p.bytes_done) }}{% if p.bytes_total %} / {{ fmt_size(p.bytes_total) }}{% endif %}{% else %}—{% endif %}</span>
+        {% if p.files_total %}<span>Fichiers : {{ '{:,}'.format(p.files_done or 0).replace(',', ' ') }} / {{ '{:,}'.format(p.files_total).replace(',', ' ') }}</span>{% endif %}
+        <span>Reste : {% if p.eta_s is not none %}≈ {{ fmt_age(p.eta_s) }}{% else %}—{% endif %}</span>
+      </div>
+      {% if p.stale %}<p class="small error">Aucune nouvelle depuis plus de 3 minutes : l'opération est peut-être bloquée ou interrompue (voir Historique).</p>{% endif %}
+    </div>
+  {% endfor %}
+  </div>
+  {% endif %}
+</section>

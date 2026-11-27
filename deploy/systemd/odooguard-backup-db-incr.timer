@@ -1,0 +1,11 @@
+[Unit]
+Description=OdooGuard - sauvegarde incrémentale horaire (8h-18h)
+
+[Timer]
+# Les WAL sont collectés en continu : l'incrémentale horaire raccourcit le
+# rejeu (donc la durée de restauration), elle ne conditionne pas la perte de données.
+OnCalendar=Mon..Sat *-*-* 08..18:05:00
+Unit=odooguard-backup-db@incr.service
+
+[Install]
+WantedBy=timers.target

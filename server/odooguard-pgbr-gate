@@ -1,0 +1,53 @@
+#!/bin/bash
+# =============================================================================
+# odooguard-pgbr-gate - filtre SSH pour les connexions pgBackRest
+#
+# Installé :
+#   * sur server01 (et la VM de test) : /usr/local/sbin/odooguard-pgbr-gate,
+#     commande forcée de la clé d'OdooGuard dans ~postgres/.ssh/authorized_keys :
+#       restrict,from="<IP OdooGuard>",command="/usr/local/sbin/odooguard-pgbr-gate pg" ssh-ed25519 ...
+#   * sur OdooGuard : commande forcée du compte en LECTURE SEULE pgbr-reader :
+#       restrict,from="192.168.8.80,<IP VM test>",command="/usr/local/sbin/odooguard-pgbr-gate repo" ssh-ed25519 ...
+#
+# N'autorise QUE le protocole distant de pgBackRest (« <commande>:remote »),
+# pour une liste fermée de commandes, sans caractère de shell. Aucun shell
+# interactif, aucune autre commande n'est possible avec ces clés.
+#
+# Rôle « pg »   : OdooGuard lit les fichiers de données de PostgreSQL
+#                 (sauvegarde, contrôle). Exécuté avec une priorité CPU/E-S basse.
+# Rôle « repo » : server01 lit le dépôt (restauration, archive-get). Le compte
+#                 pgbr-reader n'a AUCUN droit d'écriture sur le dépôt (droits
+#                 Unix : groupe en lecture seule) : même en contournant ce filtre,
+#                 il ne pourrait ni modifier ni supprimer une sauvegarde.
+# =============================================================================
+set -euo pipefail
+
+role="${1:-}"
+cmd="${SSH_ORIGINAL_COMMAND:-}"
+
+deny() {
+    logger -t odooguard-pgbr-gate -p auth.warning -- "REFUS ($role) : $1 : ${cmd:0:300}" 2>/dev/null || true
+    echo "odooguard-pgbr-gate: refusé ($1)" >&2
+    exit 1
+}
+
+case "$role" in
+    pg)   allowed='backup|check|stanza-create|stanza-upgrade' ;;
+    repo) allowed='restore|archive-get|info|verify' ;;
+    *)    deny "rôle inconnu" ;;
+esac
+
+# Forme exacte attendue (observée avec pgBackRest 2.x) :
+#   pgbackrest --opt=val ... --remote-type=pg --stanza=lnhc backup:remote
+re="^pgbackrest( --[a-z0-9-]+(=[A-Za-z0-9_./:@,+-]*)?)+ (${allowed}):remote$"
+[[ "$cmd" =~ $re ]] || deny "commande non autorisée"
+[[ "$cmd" == *" --remote-type=${role} "* ]] || deny "type de connexion distante incorrect"
+
+read -ra argv <<< "$cmd"
+logger -t odooguard-pgbr-gate -p auth.info -- "OK ($role) : ${argv[-1]}" 2>/dev/null || true
+
+if [[ "$role" == "pg" ]]; then
+    # Sauvegarde en journée : priorité basse pour ne pas gêner Odoo.
+    exec nice -n 10 ionice -c2 -n7 /usr/bin/pgbackrest "${argv[@]:1}"
+fi
+exec /usr/bin/pgbackrest "${argv[@]:1}"

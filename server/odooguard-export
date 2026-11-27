@@ -1,0 +1,51 @@
+#!/bin/bash
+# =============================================================================
+# odooguard-export - inventaire de server01, appelé par l'agent avant chaque
+# sauvegarde des fichiers. Écrit uniquement dans /var/lib/odooguard-export,
+# qui est ensuite tiré (rsync lecture seule) par OdooGuard et sauvegardé.
+# C'est ce qui permet de reconstruire server01 à l'identique sur un Debian neuf.
+# =============================================================================
+set -uo pipefail
+umask 027
+OUT=/var/lib/odooguard-export
+CONF=/etc/odooguard-agent.conf
+ODOO_CONF=/etc/odoo/odoo.conf
+IMPORT_PATHS="/etc/odoo:odoo:odoo"
+# shellcheck source=/dev/null
+[[ -r "$CONF" ]] && . "$CONF"
+
+TMP=$(mktemp -d "$OUT.tmp.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT
+cd "$TMP" || exit 1
+
+{
+  echo "date: $(date -Is)"
+  echo "hostname: $(hostname -f)"
+  echo "debian: $(cat /etc/debian_version)"
+  echo "kernel: $(uname -r)"
+} > system.txt
+dpkg-query -W -f='${Package}\t${Version}\t${Status}\n' > dpkg-packages.tsv 2>/dev/null
+dpkg --get-selections > dpkg-selections.txt 2>/dev/null
+apt-mark showmanual > apt-manual.txt 2>/dev/null
+cp -a /etc/apt/sources.list /etc/apt/sources.list.d . 2>/dev/null
+dpkg-query -W -f='${Version}\n' odoo > odoo-version.txt 2>/dev/null
+python3 -m pip freeze --all > pip-freeze-system.txt 2>/dev/null
+pg_lsclusters > pg_lsclusters.txt 2>/dev/null
+pgbackrest version > pgbackrest-version.txt 2>/dev/null
+systemctl cat odoo > systemd-odoo.txt 2>/dev/null
+crontab -l -u odoo > crontab-odoo.txt 2>/dev/null
+crontab -l > crontab-root.txt 2>/dev/null
+ip -br addr > network.txt 2>/dev/null
+# Droits et propriétaires des répertoires réinstallables (rsync côté OdooGuard
+# ne conserve pas les propriétaires : on les note ici).
+for entry in $IMPORT_PATHS; do
+  p="${entry%%:*}"
+  [[ -e "$p" ]] && find "$p" -maxdepth 2 -printf '%u:%g %m %p\n' >> permissions.txt 2>/dev/null
+done
+# Chemins des modules déclarés dans odoo.conf (sans les mots de passe)
+grep -E '^\s*(addons_path|data_dir|db_host|db_port|db_user|http_port|proxy_mode|workers)\s*=' "$ODOO_CONF" > odoo-conf-public.txt 2>/dev/null
+
+mkdir -p "$OUT"
+rsync -a --delete "$TMP/" "$OUT/"
+chmod 750 "$OUT"
+echo '{"export": "ok"}'

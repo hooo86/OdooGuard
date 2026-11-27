@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Sécurité Odoo{% endblock %}
+{% block page_title %}Sécurité Odoo{% endblock %}
+{% block page_subtitle %}Connexions à Odoo et changements de comptes utilisateurs, relevés toutes les 5 minutes sur le serveur Odoo (lecture seule).{% endblock %}
+{% block page_actions %}
+<form method="get" action="/securite" class="filters">
+  <label>Période <select name="days">{% for d, l in ((1, '24 heures'), (7, '7 jours'), (30, '30 jours'), (90, '90 jours')) %}<option value="{{ d }}" {% if d == days %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+  <button type="submit">Afficher</button>
+</form>
+{% endblock %}
+{% block content %}
+{% if not m.security %}<p class="banner banner-info">La surveillance de la sécurité d'Odoo est désactivée (Réglages → Surveillance).</p>{% endif %}
+<section class="hero" aria-label="Indicateurs de sécurité">
+  <article class="metric">
+    <header><span class="label">Connexions échouées</span>{{ icon('lock') }}</header>
+    <div class="kpi">{{ n_failed }}</div>
+    <span class="small muted">sur la période</span>
+  </article>
+  <article class="metric">
+    <header><span class="label">Échecs sur {{ m.failed_logins_window }} min</span>{{ icon('warning') }}</header>
+    <div class="kpi">{{ n_window }}</div>
+    <span class="small muted">alerte à partir de {{ m.failed_logins_warn }}</span>
+  </article>
+  <article class="metric">
+    <header><span class="label">Connexions réussies</span>{{ icon('verified') }}</header>
+    <div class="kpi">{{ n_ok }}</div>
+    <span class="small muted">sur la période</span>
+  </article>
+  <article class="metric">
+    <header><span class="label">Changements de comptes</span>{{ icon('group') }}</header>
+    <div class="kpi">{{ accounts|length }}</div>
+    <span class="small muted">créations, suppressions, archivages</span>
+  </article>
+</section>
+
+{% if top %}
+<div class="table-wrap"><table>
+  <caption>Adresses à l'origine des échecs</caption>
+  <thead><tr><th>Adresse IP</th><th class="num">Échecs</th><th class="num">Identifiants essayés</th><th>Dernier essai</th></tr></thead>
+  <tbody>{% for t in top %}<tr><td class="mono">{{ t.ip }}</td><td class="num">{{ t.n }}</td><td class="num">{{ t.logins }}</td><td class="nowrap">{{ fmt_time(t.last) }}</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endif %}
+
+<section>
+<h2>Tentatives de connexion échouées</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Date</th><th>Base</th><th>Identifiant saisi</th><th>Adresse IP</th></tr></thead>
+  <tbody>
+  {% for e in failed %}<tr><td class="nowrap">{{ fmt_time(e.ts) }}</td><td>{{ e.db }}</td><td class="mono">{{ e.login }}</td><td class="mono">{{ e.ip }}</td></tr>
+  {% else %}<tr><td colspan="4" class="muted">Aucune tentative échouée sur la période.</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+{% if failed|length >= 500 %}<p class="small muted">500 plus récentes affichées.</p>{% endif %}
+</section>
+
+<section>
+<h2>Créations, suppressions et archivages de comptes</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Date</th><th>Événement</th><th>Base</th><th>Compte</th><th>Par</th><th>Détail</th></tr></thead>
+  <tbody>
+  {% for e in accounts %}<tr>
+    <td class="nowrap">{{ fmt_time(e.ts) }}</td>
+    <td>{% if e.kind == 'user_created' %}{{ icon('person_add') }}{% elif e.kind in ('user_deleted', 'user_archived') %}{{ icon('person_remove') }}{% endif %} {{ account_fr.get(e.kind, e.kind) }}</td>
+    <td>{{ e.db }}</td><td class="mono">{{ e.login }}</td><td class="mono">{{ e.actor or '—' }}</td><td class="msg">{{ e.detail or '' }}</td></tr>
+  {% else %}<tr><td colspan="6" class="muted">Aucun changement constaté sur la période.</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+<p class="small muted">Une suppression est constatée au relevé suivant (≤ 5 min) : l'heure affichée est celle du constat et l'auteur n'est pas connu d'Odoo. Odoo archive généralement les comptes plutôt que de les supprimer.</p>
+</section>
+
+{% for db, u in users.items() %}
+<section>
+<h2>Comptes de {{ db }} <span class="small muted">{{ u.internal }} interne(s) actif(s) · {{ u.portal }} portail · {{ u.total }} au total</span></h2>
+{% if u.recent %}
+<div class="table-wrap"><table>
+  <caption>Derniers comptes créés</caption>
+  <thead><tr><th>Créé le</th><th>Identifiant</th><th>Nom</th><th>Type</th><th>État</th><th>Créé par</th><th>Dernière connexion</th></tr></thead>
+  <tbody>{% for x in u.recent %}<tr>
+    <td class="nowrap">{{ fmt_time(x.created) }}</td><td class="mono">{{ x.login }}</td><td>{{ x.name }}</td>
+    <td>{{ 'portail' if x.share else 'interne' }}</td><td>{{ 'actif' if x.active else 'archivé' }}</td>
+    <td class="mono">{{ x.created_by or '—' }}</td><td class="nowrap">{{ fmt_time(x.last_login) if x.last_login else '—' }}</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+{% else %}<p class="muted">Pas encore de relevé des comptes pour cette base.</p>{% endif %}
+</section>
+{% endfor %}
+
+<p class="small muted">Source des connexions : {{ source or 'pas encore de relevé' }}. Odoo écrit « Login failed / Login successful » dans son journal au niveau <code>info</code> (réglage <code>log_level</code> par défaut). Derrière un proxy inverse, l'adresse IP réelle n'apparaît que si Odoo tourne avec <code>proxy_mode = True</code>.</p>
+{% endblock %}

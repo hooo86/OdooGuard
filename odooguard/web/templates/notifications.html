@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Notifications{% endblock %}
+{% block page_title %}Notifications{% endblock %}
+{% block content %}
+{% set f = form or {} %}
+{% if error %}<p class="banner banner-critical" role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="/notifications/save" class="card wizard" autocomplete="off">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <fieldset>
+    <legend>Quand prévenir</legend>
+    <label>Niveau minimal envoyé par e-mail / Telegram
+      <select name="min_level">
+        <option value="warning" {% if (f.min_level or a.min_level) == 'warning' %}selected{% endif %}>avertissements et problèmes critiques</option>
+        <option value="critical" {% if (f.min_level or a.min_level) == 'critical' %}selected{% endif %}>problèmes critiques seulement</option>
+      </select></label>
+    <label>Rappel tant qu'un problème persiste (heures) <input type="number" name="repeat_hours" min="0.25" max="168" step="0.25" value="{{ f.repeat_hours or a.repeat_hours }}"></label>
+    <label class="radio"><input type="checkbox" name="send_resolved" {% if (f and f.send_resolved) or (not f and a.send_resolved) %}checked{% endif %}> Prévenir aussi quand le problème est résolu</label>
+    <p class="small muted">Le journal système reçoit toujours toutes les alertes, même sans e-mail ni Telegram.</p>
+  </fieldset>
+  <fieldset>
+    <legend><label class="radio"><input type="checkbox" name="use_email" {% if (f and f.use_email) or (not f and 'email' in a.channels) %}checked{% endif %}> E-mail (serveur SMTP)</label></legend>
+    <div class="inline-fields">
+      <label>Serveur <input name="smtp_host" value="{{ f.smtp_host if f else a.smtp_host }}" placeholder="smtp.office365.com"></label>
+      <label>Port <input type="number" name="smtp_port" value="{{ f.smtp_port if f else a.smtp_port }}" min="1" max="65535"></label>
+      <label>Sécurité <select name="smtp_security">{% for s, l in (('starttls', 'STARTTLS (587)'), ('ssl', 'SSL/TLS (465)'), ('none', 'aucune (relais interne)')) %}<option value="{{ s }}" {% if (f.smtp_security if f else a.smtp_security) == s %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+    </div>
+    <label>Compte (vide si le relais n'exige pas d'authentification) <input name="smtp_user" value="{{ f.smtp_user if f else a.smtp_user }}"></label>
+    <label>Mot de passe <input type="password" name="smtp_password" autocomplete="new-password" placeholder="{{ 'défini — laisser vide pour le conserver' if smtp_pw_set else 'non défini' }}"></label>
+    <label>Expéditeur <input name="mail_from" value="{{ f.mail_from if f else a.mail_from }}" placeholder="odooguard@lnhc-dz.com"></label>
+    <label>Destinataires (séparés par des virgules) <input name="mail_to" value="{{ f.mail_to if f else a.mail_to|join(', ') }}"></label>
+  </fieldset>
+  <fieldset>
+    <legend><label class="radio"><input type="checkbox" name="use_telegram" {% if (f and f.use_telegram) or (not f and 'telegram' in a.channels) %}checked{% endif %}> Telegram (bot)</label></legend>
+    <label>Jeton du bot (fourni par @BotFather) <input type="password" name="telegram_token" autocomplete="new-password" placeholder="{{ 'défini — laisser vide pour le conserver' if tg_token_set else '123456789:AA...' }}"></label>
+    <label>Identifiants des conversations (séparés par des virgules) <input name="telegram_chat_ids" value="{{ f.telegram_chat_ids if f else a.telegram_chat_ids|join(', ') }}" placeholder="-1001234567890"></label>
+    <label>Proxy HTTPS (si la sortie Internet en exige un) <input name="https_proxy" value="{{ f.https_proxy if f else a.https_proxy }}" placeholder="http://proxy:3128"></label>
+    <p class="small muted">Identifiant inconnu ? Ajouter le bot au groupe, y envoyer un message, puis utiliser « Trouver mes conversations » ci-dessous.</p>
+  </fieldset>
+  <fieldset>
+    <legend>Quoi envoyer, et par quel canal</legend>
+    <input type="hidden" name="routes_present" value="1">
+    <div class="table-wrap"><table class="routes">
+      <thead><tr><th>Type de notification</th><th class="center">E-mail</th><th class="center">Telegram</th></tr></thead>
+      <tbody>
+      {% for cat, lib in categories.items() %}
+        {% set r = a.routes.get(cat) %}
+        <tr><th scope="row">{{ lib }}</th>
+        {% for ch in ('email', 'telegram') %}
+          {% set name = 'route_' ~ cat ~ '_' ~ ch %}
+          <td class="center"><input type="checkbox" name="{{ name }}" aria-label="{{ lib }} : {{ ch }}"
+            {% if (form and f.get(name)) or (not form and (r is none or ch in r)) %}checked{% endif %}></td>
+        {% endfor %}</tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    <p class="small muted">S'applique seulement aux canaux activés ci-dessus. Décocher les deux : le message ne va que dans le journal système (et le tableau de bord). Le niveau minimal ci-dessus s'applique à tous les types.</p>
+  </fieldset>
+  <div class="actions"><span></span><button type="submit" class="primary">Enregistrer</button></div>
+  <p class="small muted">Les mots de passe et jetons ne sont jamais réaffichés ni enregistrés dans l'historique.</p>
+</form>
+<section class="card wizard">
+  <h2>Vérifier</h2>
+  <p class="small muted">Enregistrer d'abord les réglages : le test utilise la configuration enregistrée.</p>
+  <div class="button-row">
+  {% for ch, lib, ic in (('telegram', 'Tester Telegram', 'send'), ('email', "Tester l'e-mail", 'mail'), ('', 'Tester tous les canaux', 'notifications_active')) %}
+  <form method="post" action="/notifications/test" class="inline">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="channel" value="{{ ch }}">
+    <button type="submit">{{ icon(ic) }}{{ lib }}</button>
+  </form>
+  {% endfor %}
+  </div>
+  <form method="post" action="/notifications/telegram" class="inline-fields" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Jeton (facultatif si déjà enregistré) <input type="password" name="telegram_token" autocomplete="new-password"></label>
+    <button type="submit">Trouver mes conversations Telegram</button>
+  </form>
+</section>
+{% endblock %}

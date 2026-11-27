@@ -1,0 +1,25 @@
+# Réception continue des WAL de server01 (modèle pull, slot « odooguard »).
+# --synchronous : chaque WAL reçu est écrit et synchronisé sur disque
+# immédiatement (perte de données max. de l'ordre de la seconde).
+[Unit]
+Description=OdooGuard - réception continue des WAL de server01 (pg_receivewal)
+After=network-online.target
+Wants=network-online.target
+OnFailure=odooguard-notify@%n.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=odooguard
+Group=odooguard
+Environment=PGPASSFILE=/etc/odooguard/pgpass
+ExecStart=/usr/lib/postgresql/15/bin/pg_receivewal \
+    --dbname="host=192.168.8.80 port=5432 user=odooguard_repl application_name=odooguard connect_timeout=10" \
+    --slot=odooguard --directory=/srv/odooguard/wal-spool \
+    --synchronous --status-interval=10 --no-password --verbose
+Restart=always
+RestartSec=15
+Nice=0
+
+[Install]
+WantedBy=multi-user.target

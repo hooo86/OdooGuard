@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Rétention{% endblock %}
+{% block page_title %}Rétention des sauvegardes{% endblock %}
+{% block page_subtitle %}Combien de temps les sauvegardes sont conservées sur OdooGuard. Les NAS (et le disque G:\) en sont des copies : ils suivent la même rétention.{% endblock %}
+{% block content %}
+{% set f = form or {} %}
+{% if error %}<p class="banner banner-critical" role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="/retention/save" class="card wizard" autocomplete="off">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <fieldset {% if role != 'admin' %}disabled{% endif %}>
+    <legend>Base de données (pgBackRest)</legend>
+    <div class="inline-fields">
+      <label>Sauvegardes complètes conservées <input type="number" name="retention_full" min="1" max="52" value="{{ f.retention_full or r.full }}"></label>
+      <label>Différentielles conservées <input type="number" name="retention_diff" min="1" max="60" value="{{ f.retention_diff or r.diff }}"></label>
+    </div>
+    <p class="small muted">Restauration à un instant précis possible depuis la plus ancienne complète conservée : avec une complète par semaine{% if r.full_plan %} (<code>{{ r.full_plan }}</code>){% endif %}, {{ r.full }} complète(s) ≈ {{ r.full }} semaine(s) en arrière. Une complète n'est supprimée qu'après la réussite de la suivante ; les différentielles et incrémentales qui en dépendent partent avec elle.</p>
+  </fieldset>
+  <fieldset {% if role != 'admin' %}disabled{% endif %}>
+    <legend>Fichiers : filestore, modules, configuration (restic)</legend>
+    <div class="inline-fields">
+      <label>Instantanés horaires <input type="number" name="keep_hourly" min="0" max="1000" value="{{ f.keep_hourly or r.keep.hourly }}"></label>
+      <label>journaliers <input type="number" name="keep_daily" min="0" max="3650" value="{{ f.keep_daily or r.keep.daily }}"></label>
+      <label>hebdomadaires <input type="number" name="keep_weekly" min="0" max="520" value="{{ f.keep_weekly or r.keep.weekly }}"></label>
+      <label>mensuels <input type="number" name="keep_monthly" min="0" max="240" value="{{ f.keep_monthly or r.keep.monthly }}"></label>
+    </div>
+    <p class="small muted">Exemple 48 / 14 / 8 / 12 : chaque heure des 2 derniers jours, chaque jour des 2 dernières semaines, chaque semaine des 2 derniers mois, chaque mois de la dernière année. Les données sont dédupliquées : garder plus d'instantanés coûte peu d'espace.</p>
+  </fieldset>
+  {% if role == 'admin' %}<div class="actions"><a href="/reglages">← Réglages</a><button type="submit" class="primary">Enregistrer</button></div>
+  {% else %}<p class="small muted">Modification réservée au rôle admin.</p>{% endif %}
+  <p class="small muted">Appliquée à la prochaine sauvegarde de la base (pgBackRest) et à la prochaine maintenance (restic). Réduire la rétention supprime définitivement les sauvegardes au-delà.</p>
+</form>
+{% endblock %}

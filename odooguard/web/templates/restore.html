@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Restaurer{% endblock %}
+{% block page_title %}Assistant de restauration{% endblock %}
+{% block page_subtitle %}Étape 1 / 3 — choisir quoi restaurer, à quel instant et où. Rien n'est lancé avant la confirmation de l'étape 2.{% endblock %}
+{% block content %}
+{% if error %}<p class="banner banner-critical" role="alert">{{ error }}</p>{% endif %}
+{% if window_error %}<p class="banner banner-critical">Dépôt pgBackRest illisible : {{ window_error }}</p>{% endif %}
+<form method="post" action="/restore/preview" class="card wizard">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <fieldset>
+    <legend>Base à restaurer</legend>
+    <select name="db" required>
+      {% for d in databases %}<option value="{{ d }}" {% if form.db == d %}selected{% endif %}>{{ d }}</option>{% endfor %}
+    </select>
+  </fieldset>
+  <fieldset>
+    <legend>Instant</legend>
+    <label class="radio"><input type="radio" name="moment" value="latest" {% if form.moment != 'instant' %}checked{% endif %}> État le plus récent (dernières secondes)</label>
+    <label class="radio"><input type="radio" name="moment" value="instant" {% if form.moment == 'instant' %}checked{% endif %}> Instant précis :
+      <input type="datetime-local" name="when" step="1" value="{{ form.when or '' }}"></label>
+    <p class="small muted">Possible depuis le {{ fmt_time(window_start) if window_start else '—' }} jusqu'à maintenant (heure locale du serveur).</p>
+  </fieldset>
+  <fieldset>
+    <legend>Destination</legend>
+    <select name="target" required>
+      {% for t in targets %}<option value="{{ t.name }}" {% if (form.target or 'testvm') == t.name %}selected{% endif %}>{{ t.label }}</option>{% endfor %}
+    </select>
+    <label class="radio"><input type="radio" name="mode" value="copy" {% if form.mode != 'replace' %}checked{% endif %}>
+      Copie sous un nouveau nom, <strong>neutralisée</strong> (recommandé : rien n'est écrasé)</label>
+    <label>Nom de la copie <input name="as_name" value="{{ form.as_name or '' }}" placeholder="automatique : &lt;base&gt;_copie_AAAAMMJJ_HHMM" pattern="[A-Za-z0-9_][A-Za-z0-9_.\-]{0,62}"></label>
+    <label class="radio {% if role != 'admin' %}disabled{% endif %}"><input type="radio" name="mode" value="replace" {% if role != 'admin' %}disabled{% endif %} {% if form.mode == 'replace' %}checked{% endif %}>
+      Remplacer la base existante du même nom {% if role != 'admin' %}<span class="small">(rôle admin requis)</span>{% else %}<span class="small">— l'ancienne est renommée, jamais supprimée</span>{% endif %}</label>
+  </fieldset>
+  <fieldset>
+    <legend>Pièces jointes</legend>
+    <label class="radio"><input type="checkbox" name="with_filestore" {% if form.with_filestore != 'off' %}checked{% endif %}> Restaurer aussi le filestore (instantané le plus proche, antérieur à l'instant choisi)</label>
+  </fieldset>
+  <button type="submit" class="primary">Étape suivante : vérifier</button>
+</form>
+<h2>Dernières demandes</h2>
+{% include "_jobs.html" %}
+{% endblock %}

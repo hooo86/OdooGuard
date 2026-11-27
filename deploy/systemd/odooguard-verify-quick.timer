@@ -1,0 +1,10 @@
+[Unit]
+Description=OdooGuard - vérification rapide quotidienne (06:10)
+
+[Timer]
+OnCalendar=*-*-* 06:10:00
+Persistent=true
+Unit=odooguard-verify@quick.service
+
+[Install]
+WantedBy=timers.target

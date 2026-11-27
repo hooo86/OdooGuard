@@ -1,0 +1,18 @@
+# Sauvegarde de la base : %i = full | diff | incr
+[Unit]
+Description=OdooGuard - sauvegarde PostgreSQL (%i)
+After=network-online.target odooguard-walingest.service
+Wants=network-online.target
+OnFailure=odooguard-notify@%n.service
+
+[Service]
+Type=oneshot
+User=odooguard
+Group=odooguard
+RuntimeDirectory=odooguard
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/local/bin/odooguard backup db --type=%i --wait=21600
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=12h

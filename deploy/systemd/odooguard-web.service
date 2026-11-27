@@ -1,0 +1,36 @@
+# Tableau de bord OdooGuard (HTTPS, lecture seule). Son arrêt n'affecte pas
+# les sauvegardes, qui sont pilotées par les timers systemd.
+[Unit]
+Description=OdooGuard - tableau de bord web
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=odooguard
+Group=odooguard
+Environment=PYTHONPATH=/opt/odooguard
+ExecStart=/opt/odooguard/venv/bin/python -m odooguard web
+Restart=on-failure
+RestartSec=5
+# Durcissement : le service ne fait que lire l'état et l'historique.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# Écritures autorisées : historique SQLite (rapports Veeam / G:, audit des connexions),
+# journal d'audit, cache restic (page Sauvegardes).
+ReadWritePaths=/var/lib/odooguard /var/log/odooguard /var/log/pgbackrest /tmp
+ReadOnlyPaths=/srv/odooguard /etc/odooguard /etc/pgbackrest
+# Le port 8443 (> 1024) ne demande aucun privilège.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

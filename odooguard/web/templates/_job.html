@@ -1,0 +1,24 @@
+{% from "_badge.html" import badge %}
+<div id="job" {% if job.status in ('queued', 'running') %}hx-get="/jobs/{{ job.id }}/partial" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+  <section class="card summary">
+    <dl>
+      <dt>État</dt><dd>{% if job.status == 'success' %}{{ badge('ok') }} terminé{% elif job.status == 'failed' %}{{ badge('critical') }} en échec{% elif job.status == 'running' %}<span class="badge badge-unknown">… en cours</span>{% else %}<span class="badge badge-unknown">… en attente</span>{% endif %}</dd>
+      <dt>Demandé par</dt><dd>{{ job.user }} ({{ job.role }}) le {{ fmt_time(job.created_at) }}</dd>
+      {% if job.started_at %}<dt>Durée</dt><dd>{{ fmt_age((job.ended_at or now_ts) - job.started_at) }}</dd>{% endif %}
+      {% if job.params_d.db %}<dt>Restauration</dt><dd>{{ job.params_d.db }} → <code>{{ job.params_d.as_name }}</code> sur {{ job.params_d.target }}{% if job.params_d.when %}, instant {{ job.params_d.when[:19].replace('T', ' ') }}{% endif %}</dd>{% endif %}
+    </dl>
+    {% if job.error %}<p class="banner banner-critical">{{ job.error }}</p>{% endif %}
+  </section>
+  {% if job.result_d and job.result_d.control %}
+  <h2>Contrôle de la base restaurée</h2>
+  <div class="table-wrap"><table><tbody>
+    {% for k, val in job.result_d.control.items() %}<tr><th scope="row">{{ k }}</th><td>{{ val }}</td></tr>{% endfor %}
+    {% if job.result_d.recovery_point %}<tr><th scope="row">fin du rejeu</th><td class="small">{{ job.result_d.recovery_point }}</td></tr>{% endif %}
+  </tbody></table></div>
+  {% endif %}
+  {% if job.result_d and job.result_d.databases %}
+  <p><a href="/restore-tests">Voir le rapport du test de restauration</a></p>
+  {% endif %}
+  <h2>Journal</h2>
+  <pre class="log">{{ job.log_tail or "en attente du service odooguard-jobs…" }}</pre>
+</div>

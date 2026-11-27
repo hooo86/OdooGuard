@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Planification - {{ t.label }}{% endblock %}
+{% block page_title %}Planification : {{ t.label }}{% endblock %}
+{% block page_subtitle %}{{ t.description }}. Actuellement : {% for s in t.specs %}<code>{{ s }}</code> {% endfor %}{% if t.next %}— prochaine exécution {{ t.next }}{% endif %}. Heures du fuseau {{ tz }}.{% endblock %}
+{% block content %}
+{% if error %}<p class="banner banner-critical" role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="/planification/save" class="card wizard" data-schedule-form>
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="timer" value="{{ t.timer }}">
+  <fieldset>
+    <legend>Fréquence</legend>
+    <div class="mode-block" data-mode="times">
+      <label class="radio"><input type="radio" name="mode" value="times" {% if form.mode == 'times' %}checked{% endif %}> À heure(s) fixe(s), certains jours</label>
+      <div class="mode-fields">
+        <label>Heures (HH:MM, séparées par des virgules) <input name="times" value="{{ form.times or '01:00' }}"></label>
+      </div>
+    </div>
+    <div class="mode-block" data-mode="hourly">
+      <label class="radio"><input type="radio" name="mode" value="hourly" {% if form.mode == 'hourly' %}checked{% endif %}> Toutes les heures sur une plage, certains jours</label>
+      <div class="mode-fields inline-fields">
+        <label>de <input type="number" name="from_hour" min="0" max="23" value="{{ form.from_hour or 8 }}"></label>
+        <label>à <input type="number" name="to_hour" min="0" max="23" value="{{ form.to_hour or 18 }}"></label>
+        <label>à la minute <input type="number" name="minute" min="0" max="59" value="{{ form.minute or 5 }}"></label>
+      </div>
+    </div>
+    <div class="mode-block" data-mode="interval">
+      <label class="radio"><input type="radio" name="mode" value="interval" {% if form.mode == 'interval' %}checked{% endif %}> À intervalle régulier, tous les jours</label>
+      <div class="mode-fields inline-fields">
+        <label>Intervalle <select name="interval">{% for i in intervals %}<option value="{{ i }}" {% if form.interval == i %}selected{% endif %}>toutes les {{ i.replace('min', ' min').replace('h', ' h') }}</option>{% endfor %}</select></label>
+        <label>à la minute (intervalles d'une heure ou plus) <input type="number" name="interval_minute" min="0" max="59" value="{{ form.interval_minute or 0 }}"></label>
+      </div>
+    </div>
+    <div class="mode-block" data-mode="advanced">
+      <label class="radio"><input type="radio" name="mode" value="advanced" {% if form.mode == 'advanced' %}checked{% endif %}> Expression systemd (avancé), une par ligne</label>
+      <div class="mode-fields">
+        <textarea name="advanced" rows="3" aria-label="Expressions systemd">{{ form.advanced or '' }}</textarea>
+        <p class="small muted">Exemples : <code>Sun *-*-* 01:00:00</code> (dimanche 1 h) · <code>Mon..Sat *-*-* 08..18:05:00</code> (toutes les heures à :05 de 8 h à 18 h, du lundi au samedi) · <code>*-*-* *:20,50:00</code> (deux fois par heure).</p>
+      </div>
+    </div>
+  </fieldset>
+  <fieldset data-days>
+    <legend>Jours (modes « heures fixes » et « plage »)</legend>
+    <div class="inline-fields">
+    {% for code, fr in days %}
+      <label class="radio"><input type="checkbox" name="day_{{ code }}" {% if form.get('day_' ~ code) or (not form.get('times') and code not in ('Sun',)) %}checked{% endif %}> {{ fr }}</label>
+    {% endfor %}
+    </div>
+  </fieldset>
+  <label class="radio"><input type="checkbox" name="enable" {% if t.enabled %}checked{% endif %}> Activer cette planification</label>
+  <div class="actions">
+    <a href="/planification">← Annuler</a>
+    <button type="submit" class="primary">Enregistrer</button>
+  </div>
+</form>
+<script src="/static/schedule.js" defer></script>
+{% endblock %}

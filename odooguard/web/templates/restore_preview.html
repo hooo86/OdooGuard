@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Vérifier la restauration{% endblock %}
+{% block page_title %}Assistant de restauration{% endblock %}
+{% block page_subtitle %}Étape 2 / 3 — vérifier puis confirmer.{% endblock %}
+{% block content %}
+<section class="card summary">
+  <dl>
+    <dt>Base source</dt><dd><strong>{{ v.db }}</strong></dd>
+    <dt>Instant</dt><dd>{{ fmt_time(v.when) if v.when else "état le plus récent (dernier WAL reçu)" }}</dd>
+    <dt>Destination</dt><dd>{{ target.name }} ({{ target.host }}){% if target.is_production %} — <strong>PRODUCTION</strong>{% endif %}</dd>
+    <dt>Base créée</dt><dd><code>{{ v.as_name }}</code>{% if exists %} — <strong>existe déjà : elle sera renommée « {{ v.as_name }}_avant_restauration_&lt;date&gt; » puis remplacée</strong>{% endif %}</dd>
+    <dt>Filestore</dt><dd>{{ "oui" if v.with_filestore else "non" }}</dd>
+    <dt>Neutralisation</dt><dd>{{ "oui : courriels sortants et tâches planifiées désactivés" if neutral else "NON : la base reprend son fonctionnement normal (envois de courriels compris)" }}</dd>
+  </dl>
+  {% if target.is_production and v.replace %}
+  <p class="banner banner-critical">Avant de confirmer : <strong>arrêter Odoo</strong> sur server01, sinon les utilisateurs continuent d'écrire dans la base remplacée.</p>
+  {% endif %}
+</section>
+<form method="post" action="/restore/submit" class="card wizard">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="params" value="{{ params }}">
+  {% if v.replace %}
+  <label>Pour confirmer le remplacement, retapez exactement <code>{{ v.as_name }}</code>
+    <input name="confirm" autocomplete="off" required></label>
+  {% endif %}
+  <div class="actions">
+    <a href="/restore">← Modifier</a>
+    <button type="submit" class="{{ 'danger' if v.replace else 'primary' }}">Lancer la restauration</button>
+  </div>
+</form>
+{% endblock %}

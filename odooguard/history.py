@@ -1,0 +1,410 @@
+"""Historique SQLite : exécutions, mesures et journal d'audit.
+
+L'historique sert au tableau de bord et aux alertes, mais il n'est jamais la
+source de vérité sur la validité d'une sauvegarde : celle-ci vient toujours
+de pgBackRest (``info``) et de restic (``snapshots``), qui n'enregistrent une
+sauvegarde qu'une fois terminée et cohérente.
+"""
+
+from __future__ import annotations
+
+import getpass
+import json
+import os
+import sqlite3
+import time
+from contextlib import contextmanager
+from typing import Any, Iterator
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    component   TEXT NOT NULL,          -- db, files, copy:<dest>, verify, restore...
+    kind        TEXT NOT NULL,          -- full, diff, incr, snapshot, ...
+    started_at  REAL NOT NULL,
+    ended_at    REAL,
+    status      TEXT NOT NULL,          -- running, success, failed
+    category    TEXT,                   -- io, space, mount, command... si échec
+    size_bytes  INTEGER,                -- volume de la sauvegarde (logique)
+    added_bytes INTEGER,                -- volume réellement ajouté au dépôt
+    label       TEXT,                   -- étiquette pgBackRest / identifiant restic
+    message     TEXT,
+    details     TEXT                    -- JSON libre
+);
+CREATE INDEX IF NOT EXISTS runs_component ON runs(component, started_at);
+
+CREATE TABLE IF NOT EXISTS security_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          REAL NOT NULL,          -- heure de l'événement (UTC, epoch)
+    kind        TEXT NOT NULL,          -- login_failed, login_ok, user_created, user_deleted,
+                                        -- user_archived, user_reactivated, user_renamed
+    db          TEXT,
+    login       TEXT,
+    ip          TEXT,
+    actor       TEXT,                   -- compte Odoo auteur (comptes)
+    detail      TEXT
+);
+CREATE INDEX IF NOT EXISTS security_events_ts ON security_events(ts);
+CREATE INDEX IF NOT EXISTS security_events_kind ON security_events(kind, ts);
+
+CREATE TABLE IF NOT EXISTS kv (
+    key         TEXT PRIMARY KEY,
+    value       TEXT,
+    updated_at  REAL
+);
+
+CREATE TABLE IF NOT EXISTS metrics (
+    ts     REAL NOT NULL,
+    name   TEXT NOT NULL,
+    value  REAL
+);
+CREATE INDEX IF NOT EXISTS metrics_name ON metrics(name, ts);
+
+-- État des alertes (anti-rafale) : une ligne par problème suivi
+CREATE TABLE IF NOT EXISTS alerts (
+    key         TEXT PRIMARY KEY,       -- composant (db, nas:nas1...) ou unit:<nom>
+    level       TEXT NOT NULL,          -- warning / critical / ok (résolu)
+    message     TEXT,
+    first_seen  REAL NOT NULL,
+    last_sent   REAL,
+    sent_count  INTEGER NOT NULL DEFAULT 0,
+    resolved_at REAL
+);
+
+-- Journal des notifications envoyées (ou en échec d'envoi)
+CREATE TABLE IF NOT EXISTS notifications (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts       REAL NOT NULL,
+    key      TEXT,
+    level    TEXT,
+    title    TEXT,
+    channels TEXT,                      -- JSON {canal: "ok" | "erreur ..."}
+    body     TEXT
+);
+
+-- Rapports envoyés par les composants extérieurs (Veeam, copie hors ligne vers G:)
+CREATE TABLE IF NOT EXISTS external_reports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    received_at REAL NOT NULL,
+    status      TEXT NOT NULL,          -- success / warning / failed
+    finished_at REAL,
+    size_bytes  INTEGER,
+    duration_s  REAL,
+    message     TEXT,
+    details     TEXT,
+    source_ip   TEXT
+);
+CREATE INDEX IF NOT EXISTS external_name ON external_reports(name, received_at);
+
+-- File de travaux demandés depuis le tableau de bord (assistant de restauration)
+CREATE TABLE IF NOT EXISTS jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  REAL NOT NULL,
+    user        TEXT NOT NULL,
+    role        TEXT NOT NULL,
+    kind        TEXT NOT NULL,          -- restore-db, restore-test
+    params      TEXT NOT NULL,          -- JSON
+    status      TEXT NOT NULL,          -- queued, running, success, failed, cancelled
+    started_at  REAL,
+    ended_at    REAL,
+    log_path    TEXT,
+    result      TEXT,                   -- JSON
+    error       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS audit (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts       REAL NOT NULL,
+    actor    TEXT NOT NULL,
+    action   TEXT NOT NULL,
+    target   TEXT,
+    outcome  TEXT,
+    details  TEXT
+);
+"""
+
+
+def _pid_alive(pid: int) -> bool:
+    """Le processus existe-t-il encore et est-ce bien OdooGuard (numéro non réutilisé) ?"""
+    try:
+        with open(f"/proc/{int(pid)}/cmdline", "rb") as fh:
+            return b"odooguard" in fh.read()
+    except OSError:
+        return False
+
+
+class History:
+    def __init__(self, path: str):
+        self.path = path
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with self._conn() as c:
+            c.executescript(SCHEMA)
+            # Migration : numéro du processus qui exécute (détection des exécutions tuées)
+            if "pid" not in {r[1] for r in c.execute("PRAGMA table_info(runs)")}:
+                c.execute("ALTER TABLE runs ADD COLUMN pid INTEGER")
+
+    @contextmanager
+    def _conn(self) -> Iterator[sqlite3.Connection]:
+        conn = sqlite3.connect(self.path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------ exécutions
+    def start(self, component: str, kind: str) -> int:
+        with self._conn() as c:
+            cur = c.execute(
+                "INSERT INTO runs(component, kind, started_at, status, pid) VALUES (?,?,?,?,?)",
+                (component, kind, time.time(), "running", os.getpid()),
+            )
+            return int(cur.lastrowid)
+
+    def finish(self, run_id: int, status: str, *, message: str = "", category: str | None = None,
+               size: int | None = None, added: int | None = None, label: str | None = None,
+               details: dict[str, Any] | None = None) -> None:
+        with self._conn() as c:
+            c.execute(
+                "UPDATE runs SET ended_at=?, status=?, message=?, category=?, size_bytes=?,"
+                " added_bytes=?, label=?, details=? WHERE id=?",
+                (time.time(), status, message[:4000], category, size, added, label,
+                 json.dumps(details or {}, default=str), run_id),
+            )
+
+    def mark_interrupted(self, legacy_max_age: float = 24 * 3600) -> int:
+        """Exécutions « running » dont le processus n'existe plus -> échec « interrupted ».
+
+        Arrêt du service, redémarrage de la VM, processus tué : l'exécution n'a pas pu
+        enregistrer sa fin. Lignes antérieures à la colonne pid : interrompues si une
+        exécution plus récente du même composant existe (systemd n'en lance jamais
+        deux à la fois), ou au bout de 24 h.
+        """
+        now = time.time()
+        with self._conn() as c:
+            rows = c.execute("SELECT id, component, started_at, pid FROM runs"
+                             " WHERE status='running'").fetchall()
+            dead = []
+            for r in rows:
+                if r["pid"]:
+                    if not _pid_alive(r["pid"]):
+                        dead.append(r["id"])
+                    continue
+                newer = c.execute("SELECT 1 FROM runs WHERE component=? AND started_at>? LIMIT 1",
+                                  (r["component"], r["started_at"])).fetchone()
+                if newer or r["started_at"] < now - legacy_max_age:
+                    dead.append(r["id"])
+            for run_id in dead:
+                c.execute("UPDATE runs SET status='failed', category='interrupted', ended_at=?,"
+                          " message='exécution interrompue (processus arrêté)' WHERE id=?",
+                          (now, run_id))
+            return len(dead)
+
+    def last(self, component: str, status: str | None = None, kind: str | None = None) -> dict | None:
+        q = "SELECT * FROM runs WHERE component=?"
+        args: list[Any] = [component]
+        if status:
+            q += " AND status=?"
+            args.append(status)
+        if kind:
+            q += " AND kind=?"
+            args.append(kind)
+        q += " ORDER BY started_at DESC LIMIT 1"
+        with self._conn() as c:
+            row = c.execute(q, args).fetchone()
+            return dict(row) if row else None
+
+    def recent(self, limit: int = 50, component: str | None = None) -> list[dict]:
+        q = "SELECT * FROM runs"
+        args: list[Any] = []
+        if component:
+            q += " WHERE component LIKE ?"
+            args.append(component)
+        q += " ORDER BY started_at DESC LIMIT ?"
+        args.append(limit)
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(q, args).fetchall()]
+
+    # ------------------------------------------------------------ mesures
+    # ------------------------------------------------------------ clé / valeur
+    def kv_get(self, key: str, default: Any = None) -> Any:
+        with self._conn() as c:
+            row = c.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+        return json.loads(row["value"]) if row else default
+
+    def kv_put(self, key: str, value: Any) -> None:
+        with self._conn() as c:
+            c.execute("INSERT INTO kv(key, value, updated_at) VALUES (?,?,?)"
+                      " ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                      (key, json.dumps(value, default=str), time.time()))
+
+    # ------------------------------------------------------------ sécurité Odoo
+    def security_add(self, events: list[dict]) -> int:
+        if not events:
+            return 0
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO security_events(ts, kind, db, login, ip, actor, detail)"
+                " VALUES (:ts, :kind, :db, :login, :ip, :actor, :detail)",
+                [{"db": None, "login": None, "ip": None, "actor": None, "detail": None, **e} for e in events])
+        return len(events)
+
+    def security_events(self, since: float, kinds: tuple[str, ...] | None = None,
+                        limit: int = 500) -> list[dict]:
+        q = "SELECT * FROM security_events WHERE ts >= ?"
+        args: list[Any] = [since]
+        if kinds:
+            q += f" AND kind IN ({','.join('?' * len(kinds))})"
+            args += list(kinds)
+        q += " ORDER BY ts DESC, id DESC LIMIT ?"
+        args.append(limit)
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(q, args)]
+
+    def security_count(self, since: float, kind: str) -> int:
+        with self._conn() as c:
+            return c.execute("SELECT count(*) FROM security_events WHERE ts >= ? AND kind = ?",
+                             (since, kind)).fetchone()[0]
+
+    def security_top_ips(self, since: float, kind: str = "login_failed", limit: int = 10) -> list[dict]:
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT ip, count(*) AS n, max(ts) AS last, count(DISTINCT login) AS logins"
+                " FROM security_events WHERE ts >= ? AND kind = ? GROUP BY ip ORDER BY n DESC LIMIT ?",
+                (since, kind, limit))]
+
+    def security_purge(self, older_than: float) -> None:
+        with self._conn() as c:
+            c.execute("DELETE FROM security_events WHERE ts < ?", (older_than,))
+
+    def metric(self, name: str, value: float, ts: float | None = None) -> None:
+        with self._conn() as c:
+            c.execute("INSERT INTO metrics(ts, name, value) VALUES (?,?,?)",
+                      (ts or time.time(), name, value))
+
+    def metric_max(self, name: str, since: float) -> tuple[float | None, int]:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT MAX(value), COUNT(*) FROM metrics WHERE name=? AND ts>=?", (name, since)
+            ).fetchone()
+            return (row[0], row[1])
+
+    def metric_series(self, name: str, since: float) -> list[tuple[float, float]]:
+        with self._conn() as c:
+            return [(r[0], r[1]) for r in c.execute(
+                "SELECT ts, value FROM metrics WHERE name=? AND ts>=? ORDER BY ts", (name, since))]
+
+    def purge_metrics(self, older_than: float) -> None:
+        with self._conn() as c:
+            c.execute("DELETE FROM metrics WHERE ts < ?", (older_than,))
+
+    # ------------------------------------------------------------ alertes
+    def alert_get(self, key: str) -> dict | None:
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM alerts WHERE key=?", (key,)).fetchone()
+            return dict(row) if row else None
+
+    def alert_put(self, key: str, **fields: Any) -> None:
+        cur = self.alert_get(key)
+        with self._conn() as c:
+            if cur is None:
+                fields.setdefault("first_seen", time.time())
+                cols = ["key", *fields]
+                c.execute(f"INSERT INTO alerts({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                          [key, *fields.values()])
+            elif fields:
+                sets = ", ".join(f"{k}=?" for k in fields)
+                c.execute(f"UPDATE alerts SET {sets} WHERE key=?", [*fields.values(), key])
+
+    def alerts_active(self) -> list[dict]:
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM alerts WHERE resolved_at IS NULL ORDER BY first_seen")]
+
+    def notification_log(self, key: str, level: str, title: str, channels: dict, body: str) -> None:
+        with self._conn() as c:
+            c.execute("INSERT INTO notifications(ts, key, level, title, channels, body) VALUES (?,?,?,?,?,?)",
+                      (time.time(), key, level, title, json.dumps(channels, ensure_ascii=False), body[:4000]))
+
+    def notifications(self, limit: int = 50) -> list[dict]:
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM notifications ORDER BY ts DESC LIMIT ?", (limit,))]
+
+    # ------------------------------------------------------------ rapports extérieurs
+    def external_add(self, name: str, status: str, *, finished_at: float | None, size: int | None,
+                     duration: float | None, message: str, details: dict, source_ip: str) -> None:
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO external_reports(name, received_at, status, finished_at, size_bytes,"
+                " duration_s, message, details, source_ip) VALUES (?,?,?,?,?,?,?,?,?)",
+                (name, time.time(), status, finished_at, size, duration, message[:2000],
+                 json.dumps(details, ensure_ascii=False, default=str)[:20000], source_ip))
+
+    def external_last(self, name: str, status: str | None = None) -> dict | None:
+        q = "SELECT * FROM external_reports WHERE name=?"
+        args: list[Any] = [name]
+        if status:
+            q += " AND status=?"
+            args.append(status)
+        with self._conn() as c:
+            row = c.execute(q + " ORDER BY received_at DESC LIMIT 1", args).fetchone()
+            return dict(row) if row else None
+
+    # ------------------------------------------------------------ travaux
+    def job_create(self, user: str, role: str, kind: str, params: dict) -> int:
+        with self._conn() as c:
+            cur = c.execute("INSERT INTO jobs(created_at, user, role, kind, params, status)"
+                            " VALUES (?,?,?,?,?, 'queued')",
+                            (time.time(), user, role, kind, json.dumps(params, ensure_ascii=False)))
+            return int(cur.lastrowid)
+
+    def job_get(self, job_id: int) -> dict | None:
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            return dict(row) if row else None
+
+    def job_claim(self) -> dict | None:
+        """Prend le plus ancien travail en attente (atomique)."""
+        with self._conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY id LIMIT 1").fetchone()
+            if row is None:
+                return None
+            c.execute("UPDATE jobs SET status='running', started_at=? WHERE id=?", (time.time(), row["id"]))
+            return dict(row)
+
+    def job_update(self, job_id: int, **fields: Any) -> None:
+        if not fields:
+            return
+        sets = ", ".join(f"{k}=?" for k in fields)
+        with self._conn() as c:
+            c.execute(f"UPDATE jobs SET {sets} WHERE id=?", [*fields.values(), job_id])
+
+    def jobs_recent(self, limit: int = 50) -> list[dict]:
+        with self._conn() as c:
+            return [dict(r) for r in c.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,))]
+
+    def jobs_fail_stale(self) -> int:
+        """Au démarrage du service : un travail « running » orphelin passe en échec."""
+        with self._conn() as c:
+            return c.execute("UPDATE jobs SET status='failed', ended_at=?, error="
+                             "'interrompu (redémarrage du service de travaux)' WHERE status='running'",
+                             (time.time(),)).rowcount
+
+    def audit_recent(self, limit: int = 100) -> list[dict]:
+        with self._conn() as c:
+            return [dict(r) for r in c.execute("SELECT * FROM audit ORDER BY ts DESC LIMIT ?", (limit,))]
+
+    # ------------------------------------------------------------ audit
+    def audit(self, action: str, target: str, outcome: str, details: dict | None = None) -> None:
+        web = os.environ.get("ODOOGUARD_ACTOR")
+        actor = f"web:{web}" if web else (os.environ.get("SUDO_USER") or getpass.getuser())
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO audit(ts, actor, action, target, outcome, details) VALUES (?,?,?,?,?,?)",
+                (time.time(), actor, action, target, outcome, json.dumps(details or {}, default=str)),
+            )

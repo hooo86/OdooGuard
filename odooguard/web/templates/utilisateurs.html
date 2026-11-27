@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Utilisateurs{% endblock %}
+{% block page_title %}Utilisateurs du tableau de bord{% endblock %}
+{% block content %}
+{% if error %}<p class="banner banner-critical" role="alert">{{ error }}</p>{% endif %}
+<p class="small muted"><strong>lecteur</strong> : consultation · <strong>opérateur</strong> : lancer des sauvegardes, restaurer une copie neutralisée, tester · <strong>admin</strong> : tout, dont remplacer une base, NAS, planification, notifications, utilisateurs.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Compte</th><th>Rôle</th><th>Modifier</th><th>Supprimer</th></tr></thead>
+  <tbody>
+  {% for name, acc in accounts|dictsort %}
+    <tr>
+      <th scope="row">{{ name }}{% if name == user %} <span class="small muted">(vous)</span>{% endif %}</th>
+      <td>{{ acc.role }}</td>
+      <td>
+        <form method="post" action="/utilisateurs/save" class="inline-fields" autocomplete="off">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name" value="{{ name }}">
+          <select name="role">{% for r in roles %}<option value="{{ r }}" {% if r == acc.role %}selected{% endif %}>{{ r }}</option>{% endfor %}</select>
+          <input type="password" name="password" placeholder="nouveau mot de passe (facultatif)" autocomplete="new-password">
+          <input type="password" name="password2" placeholder="confirmation" autocomplete="new-password">
+          <button type="submit">Enregistrer</button>
+        </form>
+      </td>
+      <td>{% if name != user %}
+        <details class="remove"><summary>Supprimer</summary>
+          <form method="post" action="/utilisateurs/{{ name }}/delete">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <label class="small">Retaper <code>{{ name }}</code> <input name="confirm" autocomplete="off" required></label>
+            <button type="submit" class="danger">Supprimer {{ name }}</button>
+          </form>
+        </details>{% else %}<span class="muted small">—</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+<h2>Ajouter un compte</h2>
+<form method="post" action="/utilisateurs/save" class="card wizard" autocomplete="off">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Identifiant <input name="name" pattern="[A-Za-z0-9._-]{2,32}" required></label>
+  <label>Rôle <select name="role">{% for r in roles %}<option value="{{ r }}" {% if r == 'lecteur' %}selected{% endif %}>{{ r }}</option>{% endfor %}</select></label>
+  <label>Mot de passe (12 caractères minimum) <input type="password" name="password" minlength="12" required autocomplete="new-password"></label>
+  <label>Confirmation <input type="password" name="password2" minlength="12" required autocomplete="new-password"></label>
+  <div class="actions"><span></span><button type="submit" class="primary">Créer le compte</button></div>
+</form>
+{% endblock %}

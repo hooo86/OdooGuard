@@ -1,0 +1,11 @@
+[Unit]
+Description=OdooGuard - sauvegarde des fichiers toutes les 30 min
+
+[Timer]
+# Toutes les 30 min, jour et nuit : perte maximale sur les pièces jointes < 1 h.
+OnCalendar=*-*-* *:20,50:00
+Persistent=true
+Unit=odooguard-backup-files.service
+
+[Install]
+WantedBy=timers.target

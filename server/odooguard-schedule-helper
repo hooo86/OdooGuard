@@ -1,0 +1,121 @@
+#!/usr/bin/python3 -I
+# =============================================================================
+# odooguard-schedule-helper : planification des sauvegardes OdooGuard
+# (exécuté en root via sudo par le service odooguard-jobs)
+#
+#   set     MINUTEUR EXPRESSION [EXPRESSION...]   nouvelle planification
+#   reset   MINUTEUR                              retour à la planification d'origine
+#   enable  MINUTEUR                              active le minuteur
+#   disable MINUTEUR                              suspend le minuteur
+#   timezone ZONE                                 fuseau horaire du système (timedatectl),
+#                                                 puis redémarrage du tableau de bord
+#
+# MINUTEUR : uniquement les minuteurs OdooGuard de la liste ci-dessous.
+# EXPRESSION : format OnCalendar de systemd, vérifiée par « systemd-analyze calendar ».
+# La planification est écrite dans un fichier complémentaire (drop-in)
+#   /etc/systemd/system/<minuteur>.d/odooguard-planification.conf
+# sans toucher à l'unité d'origine : « reset » le supprime simplement.
+# =============================================================================
+import json
+import os
+import re
+import subprocess
+import sys
+
+TEST_ROOT = os.environ.get("ODOOGUARD_SCHEDULE_HELPER_TESTROOT", "")  # tests uniquement (sudo l'efface)
+UNIT_DIR = os.path.join(TEST_ROOT or "/", "etc/systemd/system")
+DROPIN = "odooguard-planification.conf"
+TIMERS = {
+    "odooguard-backup-db-full.timer", "odooguard-backup-db-diff.timer",
+    "odooguard-backup-db-incr.timer", "odooguard-backup-files.timer", "odooguard-copy.timer",
+    "odooguard-verify-quick.timer", "odooguard-verify-full.timer",
+    "odooguard-maintenance.timer", "odooguard-restore-test.timer",
+}
+SPEC_RE = re.compile(r"^[A-Za-z0-9 ,.:/*~-]{1,100}$")
+
+
+def out(ok, **kw):
+    print(json.dumps({"ok": ok, **kw}, ensure_ascii=False))
+    sys.exit(0 if ok else 2)
+
+
+def timer_arg(args):
+    if not args or args[0] not in TIMERS:
+        out(False, error=f"minuteur non autorisé : {args[0] if args else ''!r}")
+    return args[0]
+
+
+def systemctl(*args):
+    if TEST_ROOT:
+        return
+    r = subprocess.run(["systemctl", *args], capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        out(False, error=f"systemctl {' '.join(args)} : {(r.stderr or r.stdout).strip()[-300:]}")
+
+
+def check_spec(spec):
+    if not SPEC_RE.match(spec):
+        out(False, error=f"expression refusée (caractères) : {spec!r}")
+    r = subprocess.run(["systemd-analyze", "calendar", spec], capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        out(False, error=f"expression invalide pour systemd : {spec!r}")
+
+
+def main():
+    if not TEST_ROOT and os.geteuid() != 0:
+        out(False, error="à exécuter en root")
+    if len(sys.argv) < 2:
+        out(False, error="verbe manquant : set | reset | enable | disable")
+    verb, args = sys.argv[1], sys.argv[2:]
+    if verb == "timezone":
+        tz = args[0] if len(args) == 1 else ""
+        if not re.match(r"^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$", tz) or ".." in tz \
+                or not os.path.isfile(os.path.join("/usr/share/zoneinfo", tz)):
+            out(False, error=f"fuseau horaire invalide : {tz!r}")
+        if not TEST_ROOT:
+            r = subprocess.run(["timedatectl", "set-timezone", tz], capture_output=True, text=True, timeout=60)
+            if r.returncode != 0:
+                out(False, error=f"timedatectl : {(r.stderr or r.stdout).strip()[-300:]}")
+            # Le tableau de bord lit l'heure locale au démarrage : on le relance (sans attendre)
+            subprocess.run(["systemctl", "try-restart", "--no-block", "odooguard-web.service"],
+                           capture_output=True, timeout=60)
+        out(True, timezone=tz)
+    timer = timer_arg(args)
+    ddir = os.path.join(UNIT_DIR, timer + ".d")
+    if verb == "set":
+        specs = args[1:]
+        if not 1 <= len(specs) <= 8:
+            out(False, error="entre 1 et 8 expressions")
+        for spec in specs:
+            check_spec(spec)
+        os.makedirs(ddir, exist_ok=True)
+        content = ("# Planification définie depuis le tableau de bord OdooGuard\n[Timer]\n"
+                   "OnCalendar=\n" + "".join(f"OnCalendar={s}\n" for s in specs))
+        tmp = os.path.join(ddir, DROPIN + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, os.path.join(ddir, DROPIN))
+        systemctl("daemon-reload")
+        systemctl("try-restart", timer)  # ne démarre pas un minuteur suspendu
+        out(True, timer=timer, specs=specs)
+    elif verb == "reset":
+        try:
+            os.remove(os.path.join(ddir, DROPIN))
+        except FileNotFoundError:
+            pass
+        systemctl("daemon-reload")
+        systemctl("try-restart", timer)
+        out(True, timer=timer, reset=True)
+    elif verb == "enable":
+        systemctl("enable", "--now", timer)
+        out(True, timer=timer, enabled=True)
+    elif verb == "disable":
+        systemctl("disable", "--now", timer)
+        out(True, timer=timer, enabled=False)
+    else:
+        out(False, error=f"verbe inconnu : {verb}")
+
+
+if __name__ == "__main__":
+    main()

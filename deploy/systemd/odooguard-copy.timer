@@ -1,0 +1,13 @@
+[Unit]
+Description=OdooGuard - copie horaire (incrémentale) vers les NAS
+
+[Timer]
+# Toutes les heures à :40 (après l'incrémentale de :05) : si la VM OdooGuard
+# était perdue, les NAS ont moins d'une heure de retard. rsync / restic copy
+# ne transfèrent que les nouveaux fichiers (quelques Mo à quelques centaines de Mo).
+OnCalendar=*-*-* *:40:00
+Persistent=true
+Unit=odooguard-copy.service
+
+[Install]
+WantedBy=timers.target

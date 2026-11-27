@@ -1,0 +1,12 @@
+[Unit]
+Description=OdooGuard - test de restauration hebdomadaire (samedi 06:30)
+
+[Timer]
+# Samedi matin : la VM de test et OdooGuard sont libres ; on restaure par
+# défaut « hier 16:00 », soit un vendredi après-midi, journée d'activité normale.
+OnCalendar=Sat *-*-* 06:30:00
+Persistent=true
+Unit=odooguard-restore-test.service
+
+[Install]
+WantedBy=timers.target

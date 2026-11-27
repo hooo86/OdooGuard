@@ -1,0 +1,40 @@
+# =============================================================================
+# /etc/pgbackrest/pgbackrest.conf  sur OdooGuard (hôte du dépôt)
+# root:odooguard 640. @CIPHER_PASS@ est remplacé à l'installation par la phrase
+# de chiffrement (aussi conservée sous pli scellé : indispensable pour
+# restaurer SANS OdooGuard depuis une copie NAS).
+# =============================================================================
+[global]
+repo1-path=/srv/odooguard/pgbackrest
+repo1-cipher-type=aes-256-cbc
+repo1-cipher-pass=@CIPHER_PASS@
+# Rétention : 4 complètes (≈ 4 semaines) ; différentielles de la dernière semaine.
+# Les WAL sont conservés jusqu'à la plus ancienne complète (PITR sur 4 semaines).
+repo1-retention-full-type=count
+repo1-retention-full=4
+repo1-retention-diff=7
+# Regroupement des petits fichiers (pgBackRest >= 2.39) : une base Odoo compte des
+# dizaines de milliers de petits fichiers (tables, index) ; regroupés en paquets
+# d'environ 20 Mio, la copie vers les NAS (SMB) et vers G:\ est bien plus rapide.
+# Restauration inchangée, avec ou sans OdooGuard (format standard de pgBackRest).
+repo1-bundle=y
+compress-type=zst
+compress-level=3
+# 2 processus : compromis débit / charge de server01 en journée
+process-max=2
+# start-fast=n : la sauvegarde attend le prochain point de contrôle planifié
+# au lieu d'en forcer un (pas de pic d'écriture sur server01 en journée).
+start-fast=n
+archive-check=y
+archive-timeout=600
+log-path=/var/log/pgbackrest
+# Répertoire de travail asynchrone propre à OdooGuard (pas /var/spool/pgbackrest)
+spool-path=/var/lib/odooguard/pgbackrest-spool
+log-level-console=warn
+log-level-file=info
+[lnhc]
+pg1-host=192.168.8.80
+pg1-host-user=postgres
+pg1-host-config=/etc/pgbackrest/pgbackrest.conf
+pg1-path=/var/lib/postgresql/15/main
+pg1-port=5432

@@ -1,0 +1,511 @@
+#!/bin/bash
+# =============================================================================
+# odooguard-agent - agent à liste blanche exécuté sur les serveurs Odoo
+#                   (server01 et VM de test), en root, via SSH :
+#
+#   /root/.ssh/authorized_keys :
+#     restrict,from="<IP OdooGuard>",command="/usr/local/sbin/odooguard-agent" ssh-ed25519 ... odooguard
+#   /etc/ssh/sshd_config.d/odooguard.conf :
+#     PermitRootLogin forced-commands-only
+#
+# Chaque appel est journalisé (journal système, étiquette odooguard-agent).
+# Les arguments sont validés : uniquement [A-Za-z0-9_.:+/=-], aucun shell.
+# Rien n'est jamais supprimé : ce qui est remplacé est d'abord renommé
+# « <nom>_avant_restauration_<AAAAMMJJ-HHMMSS> ».
+#
+# Verbes :
+#   rsync --server --sender ...   lecture seule (rrsync -ro), sauvegarde des fichiers
+#   pg-control VER CLUSTER         contenu binaire de global/pg_control
+#   wal-status VER CLUSTER         état du flux WAL vers OdooGuard (JSON)
+#   export                         met à jour /var/lib/odooguard-export (versions, pip...)
+#   db-exists NOM                  {"exists": true|false}
+#   db-import NOM [--replace]      pg_restore depuis l'entrée standard
+#   filestore-import NOM [--replace]  tar depuis l'entrée standard
+#   fs-import CHEMIN               tar depuis l'entrée standard (chemins autorisés)
+#   neutralize NOM                 odoo neutralize
+#   db-report NOM                  comptages de contrôle + lisibilité des pièces jointes (JSON)
+#   odoo-start | odoo-stop | odoo-status
+#   monitor CURSEUR BASE...        surveillance, lecture seule : disques, services,
+#                                  connexions Odoo (journal), comptes Odoo (JSON) ;
+#                                  services : Odoo, PostgreSQL, nginx, cron, ssh + MONITOR_SERVICES
+#   pg-restore-cluster VER CLUSTER STANZA HORODATAGE|latest
+#   create-slot VER CLUSTER        (re)crée le slot de réplication « odooguard »
+#   db-list-test                   bases de test « ogtest_* » (JSON)          [VM de test]
+#   db-drop-test NOM               supprime une base de test « ogtest_* »     [VM de test]
+#                                  et son filestore ; refusé sauf ALLOW_TEST_DROP=yes
+# =============================================================================
+set -euo pipefail
+umask 027
+# Répertoire neutre : runuser -u postgres ne peut pas lire /root (avertissement psql)
+cd /
+
+CONF=/etc/odooguard-agent.conf
+ODOO_USER=odoo
+ODOO_DB_USER=odoo
+ODOO_SERVICE=odoo
+ODOO_CONF=/etc/odoo/odoo.conf
+ODOO_BIN=/usr/bin/odoo
+FILESTORE=/var/lib/odoo/.local/share/Odoo/filestore
+EXPORT_DIR=/var/lib/odooguard-export
+SLOT=odooguard
+APPNAME=odooguard
+# Chemins réinstallables par fs-import : "chemin:propriétaire:groupe" séparés par des espaces
+IMPORT_PATHS="/etc/odoo:odoo:odoo"
+RECOVERY_TIMEOUT=21600
+# Seule la VM de test met ALLOW_TEST_DROP=yes : jamais sur server01.
+ALLOW_TEST_DROP=no
+# shellcheck source=/dev/null
+[[ -r "$CONF" ]] && . "$CONF"
+
+TS=$(date +%Y%m%d-%H%M%S)
+cmd="${SSH_ORIGINAL_COMMAND:-$*}"
+
+log()  { logger -t odooguard-agent -p daemon.info -- "$*" 2>/dev/null || true; }
+die()  { logger -t odooguard-agent -p daemon.err -- "ERREUR: $*" 2>/dev/null || true; echo "odooguard-agent: $*" >&2; exit 1; }
+json_str() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
+as_pg() { runuser -u postgres -- "$@"; }
+# Cause probable d'un arrêt de PostgreSQL pendant un chargement (sur stderr) :
+# disque plein, mémoire (OOM killer), dernières lignes graves du journal.
+pg_failure_diag() {
+    local dir free mem oom pglog
+    dir=$(as_pg psql -XAtc 'show data_directory' 2>/dev/null || echo /var/lib/postgresql)
+    free=$(df -h --output=avail,pcent "$dir" 2>/dev/null | tail -1 | awk '{print $1" libres ("$2" occupé)"}')
+    mem=$(free -h 2>/dev/null | awk '/^Mem:/{print "RAM "$2", dispo "$7} /^Swap:/{print "swap "$2}' | paste -sd";" - | sed "s/;/, /")
+    echo "diagnostic : disque PostgreSQL ${free:-?} ; ${mem:-mémoire ?}" >&2
+    if [[ "$(df --output=pcent "$dir" 2>/dev/null | tail -1 | tr -dc 0-9)" -ge 98 ]] 2>/dev/null; then
+        echo "cause probable : DISQUE PLEIN sur la machine cible ($dir)" >&2
+    fi
+    oom=$(journalctl -k --since "-6h" --no-pager -q 2>/dev/null | grep -iE "out of memory|oom-kill|killed process" | tail -2)
+    [[ -n "$oom" ]] && { echo "cause probable : MÉMOIRE INSUFFISANTE (OOM killer) :" >&2; echo "$oom" >&2; }
+    pglog=$(ls -t /var/log/postgresql/postgresql-*.log 2>/dev/null | head -1)
+    [[ -n "$pglog" ]] && grep -E "PANIC|FATAL|terminated by signal|No space left|out of memory" "$pglog" | tail -4 | sed 's/^/journal PostgreSQL : /' >&2
+    return 0
+}
+psql_q() { as_pg psql -XAtq "$@"; }
+
+log "appel : ${cmd:0:300}"
+
+# --- rsync en lecture seule (sauvegarde des fichiers) -----------------------
+if [[ "$cmd" == "rsync --server --sender "* ]]; then
+    exec nice -n 10 ionice -c2 -n7 /usr/bin/rrsync -ro /
+fi
+
+[[ "$cmd" =~ ^[A-Za-z0-9_.:+/=\ -]+$ ]] || die "caractères interdits dans la commande"
+read -ra argv <<< "$cmd"
+verb="${argv[0]:-}"
+set -- "${argv[@]:1}"
+
+valid_db()      { [[ "$1" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}$ ]] || die "nom de base invalide : $1"; }
+valid_ver()     { [[ "$1" =~ ^[0-9]{2}$ ]] || die "version PostgreSQL invalide : $1"; }
+valid_cluster() { [[ "$1" =~ ^[a-z0-9_]{1,32}$ ]] || die "nom d'instance invalide : $1"; }
+
+db_exists() { [[ "$(psql_q -v n="$1" <<< "select count(*) from pg_database where datname = :'n'")" == "1" ]]; }
+
+terminate_db() {
+    psql_q -v n="$1" <<< "select pg_terminate_backend(pid) from pg_stat_activity where datname = :'n' and pid <> pg_backend_pid()" >/dev/null
+}
+
+case "$verb" in
+# --------------------------------------------------------------- lecture
+pg-control)
+    valid_ver "$1"; valid_cluster "$2"
+    exec cat "/var/lib/postgresql/$1/$2/global/pg_control"
+    ;;
+wal-status)
+    valid_ver "$1"; valid_cluster "$2"
+    psql_q <<SQL
+select json_build_object(
+  'streaming', exists(select 1 from pg_stat_replication where application_name = '$APPNAME' and state = 'streaming'),
+  'flush_lag_s', (select extract(epoch from coalesce(flush_lag, interval '0')) from pg_stat_replication where application_name = '$APPNAME' limit 1),
+  'lag_bytes', (select pg_wal_lsn_diff(pg_current_wal_lsn(), flush_lsn) from pg_stat_replication where application_name = '$APPNAME' limit 1),
+  'slot_active', (select active from pg_replication_slots where slot_name = '$SLOT'),
+  'slot_wal_status', (select wal_status from pg_replication_slots where slot_name = '$SLOT'),
+  'slot_retained_bytes', (select pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) from pg_replication_slots where slot_name = '$SLOT'),
+  'server_time', now())
+SQL
+    ;;
+export)
+    exec /usr/local/sbin/odooguard-export
+    ;;
+db-exists)
+    valid_db "$1"
+    if db_exists "$1"; then echo '{"exists": true}'; else echo '{"exists": false}'; fi
+    ;;
+db-report)
+    valid_db "$1"
+    db="$1"
+    db_exists "$db" || die "base absente : $db"
+    report=$(as_pg psql -XAtq -d "$db" <<'SQL'
+select json_build_object(
+  'partners',     (select count(*) from res_partner),
+  'users',        (select count(*) from res_users),
+  'companies',    (select count(*) from res_company),
+  'account_moves',(select case when to_regclass('account_move') is null then null else
+                    (xpath('/row/c/text()', query_to_xml('select count(*) as c from account_move', false, true, '')))[1]::text::bigint end),
+  'sale_orders',  (select case when to_regclass('sale_order') is null then null else
+                    (xpath('/row/c/text()', query_to_xml('select count(*) as c from sale_order', false, true, '')))[1]::text::bigint end),
+  'attachments',  (select count(*) from ir_attachment),
+  'attachments_in_filestore', (select count(*) from ir_attachment where store_fname is not null),
+  'last_write',   (select max(write_date) from res_partner),
+  'neutralized',  (select value from ir_config_parameter where key = 'database.is_neutralized'),
+  'modules_installed', (select count(*) from ir_module_module where state = 'installed'),
+  'last_activity', (select case when to_regclass('mail_message') is null then
+                      (select max(write_date) from res_partner) else
+                      (xpath('/row/c/text()', query_to_xml('select max(create_date) as c from mail_message', false, true, '')))[1]::text::timestamp end))
+SQL
+)
+    # Lisibilité des pièces jointes : échantillon de 200 fichiers au hasard
+    total=0; missing=0
+    while IFS= read -r f; do
+        [[ -z "$f" ]] && continue
+        total=$((total + 1))
+        if ! runuser -u "$ODOO_USER" -- test -r "$FILESTORE/$db/$f"; then missing=$((missing + 1)); fi
+    done < <(as_pg psql -XAtq -d "$db" -c "select store_fname from ir_attachment where store_fname is not null order by random() limit 200")
+    python3 - "$report" "$total" "$missing" <<'PY'
+import json, sys
+r = json.loads(sys.argv[1]); r["attachments_sampled"] = int(sys.argv[2]); r["attachments_missing"] = int(sys.argv[3])
+print(json.dumps(r))
+PY
+    ;;
+db-list-test)
+    [[ "$ALLOW_TEST_DROP" == "yes" ]] || die "db-list-test réservé à la VM de test (ALLOW_TEST_DROP=yes)"
+    psql_q <<< "select coalesce(json_agg(datname order by datname), '[]') from pg_database where datname like 'ogtest\_%'" \
+        | python3 -c 'import json,sys; print(json.dumps({"databases": json.loads(sys.stdin.read() or "[]")}))'
+    ;;
+db-drop-test)
+    [[ "$ALLOW_TEST_DROP" == "yes" ]] || die "db-drop-test réservé à la VM de test (ALLOW_TEST_DROP=yes)"
+    valid_db "$1"
+    [[ "$1" == ogtest_* ]] || die "seules les bases ogtest_* peuvent être supprimées"
+    log "suppression de la base de test $1"
+    if db_exists "$1"; then
+        terminate_db "$1"
+        as_pg dropdb "$1"
+    fi
+    [[ -d "$FILESTORE/$1" ]] && rm -rf -- "${FILESTORE:?}/$1"
+    echo "{\"dropped\": $(json_str "$1")}"
+    ;;
+odoo-status)
+    systemctl is-active "$ODOO_SERVICE" || true
+    ;;
+monitor)
+    # Surveillance (lecture seule) : disques, services, connexions Odoo, comptes Odoo.
+    #   monitor CURSEUR BASE [BASE...]
+    # CURSEUR : position de lecture du journal d'Odoo renvoyée par l'appel précédent
+    # (« - » au premier appel). Aucun état n'est conservé sur ce serveur.
+    cursor="${1:--}"; shift || true
+    [[ "$cursor" =~ ^(-|f:[0-9]{1,20}:[0-9]{1,20}|j:[0-9]{1,12})$ ]] || die "curseur invalide"
+    for db in "$@"; do valid_db "$db"; done
+    users_json="{"
+    sep=""
+    for db in "$@"; do
+        if db_exists "$db"; then
+            u=$(as_pg psql -XAtq -d "$db" <<'SQL' 2>/dev/null || echo '[]'
+select coalesce(json_agg(json_build_object(
+  'id', u.id, 'login', u.login, 'name', p.name, 'active', u.active, 'share', u.share,
+  'created', extract(epoch from u.create_date), 'written', extract(epoch from u.write_date),
+  'created_by', cu.login, 'written_by', wu.login,
+  'last_login', (select extract(epoch from max(l.create_date)) from res_users_log l where l.create_uid = u.id)
+) order by u.id), '[]')
+from res_users u
+join res_partner p on p.id = u.partner_id
+left join res_users cu on cu.id = u.create_uid
+left join res_users wu on wu.id = u.write_uid
+SQL
+)
+        else
+            u='null'
+        fi
+        users_json+="$sep$(json_str "$db"): ${u:-[]}"
+        sep=", "
+    done
+    users_json+="}"
+    logfile=$(sed -n 's/^[[:space:]]*logfile[[:space:]]*=[[:space:]]*//p' "$ODOO_CONF" 2>/dev/null | tail -1 | tr -d '[:space:]')
+    [[ "$logfile" =~ ^(False|false|None)?$ ]] && logfile=""
+    pgdata="/var/lib/postgresql"
+    MONITOR_SERVICES="${MONITOR_SERVICES:-}"
+    # Liste des comptes par fichier : elle dépasse vite la taille maximale d'un argument (128 Kio)
+    users_file=$(mktemp /tmp/odooguard-monitor.XXXXXX)
+    trap 'rm -f "$users_file"' EXIT
+    printf '%s' "$users_json" > "$users_file"
+    python3 - "$cursor" "$logfile" "$ODOO_SERVICE" "$FILESTORE" "$pgdata" "$MONITOR_SERVICES" "$users_file" <<'PY'
+import datetime as dt, json, os, re, subprocess, sys
+cursor, logfile, odoo_service, filestore, pgdata, extra_services, users_file = sys.argv[1:8]
+out = {"version": 1}
+
+# ---- disques : systèmes de fichiers des chemins importants (sans doublon)
+disks, seen = [], set()
+for label, path in (("système", "/"), ("PostgreSQL", pgdata), ("filestore Odoo", filestore),
+                    ("journaux", "/var/log")):
+    if not os.path.exists(path):
+        continue
+    st = os.statvfs(path)
+    dev = os.stat(path).st_dev
+    if dev in seen:
+        continue
+    seen.add(dev)
+    mnt = path
+    while not os.path.ismount(mnt):
+        mnt = os.path.dirname(mnt)
+    total = st.f_blocks * st.f_frsize
+    free = st.f_bavail * st.f_frsize
+    disks.append({"label": label, "mount": mnt, "total": total, "free": free,
+                  "used": total - st.f_bfree * st.f_frsize})
+out["disks"] = disks
+
+# ---- services : Odoo, PostgreSQL (instances), serveur web, cron, ssh + liste locale
+def show(unit):
+    r = subprocess.run(["systemctl", "show", unit, "-p",
+                        "Id,LoadState,ActiveState,SubState,ActiveEnterTimestamp,NRestarts,Description,UnitFileState"],
+                       capture_output=True, text=True, timeout=20)
+    return dict(l.split("=", 1) for l in r.stdout.splitlines() if "=" in l)
+OPTIONAL = ("nginx.service", "cron.service", "ssh.service")
+units = [odoo_service + ".service"]
+r = subprocess.run(["systemctl", "list-units", "--all", "--plain", "--no-legend", "postgresql@*.service"],
+                   capture_output=True, text=True, timeout=20)
+units += [l.split()[0] for l in r.stdout.splitlines() if l.strip()]
+for u in ("nginx.service", "cron.service", "ssh.service"):
+    units.append(u)
+units += [u if "." in u else u + ".service" for u in extra_services.split()]
+services, done = [], set()
+for u in units:
+    if u in done:
+        continue
+    done.add(u)
+    s = show(u)
+    if s.get("LoadState") != "loaded" and u not in (odoo_service + ".service",) and u not in extra_services.split():
+        continue  # service facultatif absent de ce serveur
+    if u in OPTIONAL and s.get("ActiveState") != "active" and s.get("UnitFileState") != "enabled":
+        continue  # installé mais volontairement désactivé
+    services.append({"unit": u, "description": s.get("Description", ""), "load": s.get("LoadState"),
+                     "active": s.get("ActiveState"), "sub": s.get("SubState"),
+                     "since": s.get("ActiveEnterTimestamp", ""), "restarts": s.get("NRestarts"),
+                     "enabled": s.get("UnitFileState")})
+r = subprocess.run(["systemctl", "list-units", "--state=failed", "--plain", "--no-legend"],
+                   capture_output=True, text=True, timeout=20)
+out["services"] = services
+out["failed_units"] = [l.split()[0] for l in r.stdout.splitlines() if l.strip()][:30]
+
+# ---- connexions Odoo (journal d'Odoo, heures en UTC)
+LOGIN = re.compile(r"Login (failed|successful) for db:(\S*) login:(.*?) from (\S+)")
+STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+events, MAXEV = [], 5000
+
+def take(line, ts=None):
+    m = LOGIN.search(line)
+    if not m or len(events) >= MAXEV:
+        return
+    if ts is None:
+        s = STAMP.match(line)
+        if not s:
+            return
+        ts = dt.datetime.strptime(s.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp()
+    events.append({"ts": ts, "ok": m.group(1) == "successful", "db": m.group(2),
+                   "login": m.group(3)[:120], "ip": m.group(4).rstrip(".,")[:64]})
+
+def read_from(path, offset):
+    with open(path, "rb") as fh:
+        fh.seek(offset)
+        for raw in fh:
+            take(raw.decode("utf-8", "replace"))
+        return fh.tell()
+
+auth = {"source": "", "cursor": cursor}
+if logfile and os.path.isfile(logfile):
+    auth["source"] = "fichier " + logfile
+    st = os.stat(logfile)
+    ino, off = st.st_ino, max(0, st.st_size - 2 * 1024 * 1024)  # 1er appel : 2 Mio les plus récents
+    if cursor.startswith("f:"):
+        _, c_ino, c_off = cursor.split(":")
+        c_ino, c_off = int(c_ino), int(c_off)
+        if c_ino == ino and c_off <= st.st_size:
+            off = c_off
+        else:
+            # Fichier remplacé (rotation) : fin de l'ancien fichier s'il est encore là, puis le nouveau
+            for old in (logfile + ".1", logfile + ".0"):
+                try:
+                    if os.stat(old).st_ino == c_ino:
+                        read_from(old, c_off)
+                except OSError:
+                    pass
+            off = 0
+    end = read_from(logfile, off)
+    auth["cursor"] = f"f:{ino}:{end}"
+else:
+    auth["source"] = "journal systemd (" + odoo_service + ")"
+    # Fenêtre [curseur, maintenant[ en secondes entières : chaque ligne lue une seule fois
+    import time
+    now = int(time.time())
+    since = int(cursor[2:]) if cursor.startswith("j:") else now - 7200
+    cmd = ["journalctl", "-u", odoo_service, "-o", "json", "--no-pager",
+           "--since", f"@{since}", "--until", f"@{now}"]
+    r = subprocess.run(cmd + ["-g", "Login (failed|successful) for db:"], capture_output=True,
+                       text=True, timeout=120)
+    if r.returncode != 0:  # journalctl sans recherche par motif : filtrage ici
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    for l in r.stdout.splitlines():
+        try:
+            e = json.loads(l)
+        except ValueError:
+            continue
+        msg = e.get("MESSAGE")
+        if isinstance(msg, str):
+            take(msg, int(e.get("__REALTIME_TIMESTAMP", "0")) / 1e6)
+    auth["cursor"] = f"j:{now}"
+auth["events"] = events
+auth["truncated"] = len(events) >= MAXEV
+out["auth"] = auth
+if os.path.isfile(users_file):
+    with open(users_file, encoding="utf-8") as fh:
+        out["users"] = json.load(fh)
+else:  # appel direct du script (tests) : JSON en argument
+    out["users"] = json.loads(users_file)
+
+# ---- taille des bases (pg_database_size) et de leur filestore (du, au plus 1 fois / 6 h)
+sizes = {}
+for db, users in out["users"].items():
+    if users is None:
+        continue
+    try:
+        r = subprocess.run(["runuser", "-u", "postgres", "--", "psql", "-XAtq", "-d", db, "-c",
+                            "select pg_database_size(current_database())"],
+                           capture_output=True, text=True, timeout=60, cwd="/")
+        sizes[db] = {"db": int(r.stdout.strip())}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        sizes[db] = {"db": None}
+# Taille du filestore : « du » peut durer plusieurs minutes, il tourne en arrière-plan
+# (au plus toutes les 6 h) et ce relevé lit le dernier résultat.
+cache = "/var/lib/odooguard-export/filestore-sizes.tsv"
+running = cache + ".running"
+fs, measured = {}, None
+try:
+    measured = os.stat(cache).st_mtime
+    for line in open(cache):
+        db, _, size = line.rstrip("\n").partition("\t")
+        if size.isdigit():
+            fs[db] = int(size)
+except OSError:
+    pass
+import shlex, time as _t
+busy = os.path.exists(running) and _t.time() - os.stat(running).st_mtime < 3600
+if not busy and (measured is None or _t.time() - measured > 6 * 3600):
+    parts = [f"touch {shlex.quote(running)}", f": > {shlex.quote(cache + '.new')}"]
+    for db in sizes:
+        path = os.path.join(filestore, db)
+        parts.append(f"[ -d {shlex.quote(path)} ] && printf '%s\\t%s\\n' {shlex.quote(db)} "
+                     f"\"$(nice -n 19 ionice -c3 du -sb {shlex.quote(path)} | cut -f1)\" >> {shlex.quote(cache + '.new')}")
+    parts += [f"mv {shlex.quote(cache + '.new')} {shlex.quote(cache)}", f"rm -f {shlex.quote(running)}"]
+    os.makedirs(os.path.dirname(cache), exist_ok=True)
+    subprocess.Popen(["sh", "-c", " ; ".join(parts)], start_new_session=True, cwd="/",
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+for db in sizes:
+    sizes[db]["filestore"] = fs.get(db)
+sizes["_filestore_measured_at"] = measured
+out["db_sizes"] = sizes
+print(json.dumps(out))
+PY
+    ;;
+# --------------------------------------------------------------- écriture
+odoo-stop)  log "arrêt d'Odoo";     systemctl stop "$ODOO_SERVICE" ;;
+odoo-start) log "démarrage d'Odoo"; systemctl start "$ODOO_SERVICE" ;;
+create-slot)
+    valid_ver "$1"; valid_cluster "$2"
+    psql_q <<< "select pg_create_physical_replication_slot('$SLOT') where not exists (select 1 from pg_replication_slots where slot_name = '$SLOT')" >/dev/null
+    echo '{"slot": "ok"}'
+    ;;
+db-import)
+    valid_db "$1"
+    db="$1"; replace="${2:-}"
+    if db_exists "$db"; then
+        [[ "$replace" == "--replace" ]] || die "la base $db existe déjà (remplacement non demandé)"
+        old="${db}_avant_restauration_${TS}"
+        log "base $db renommée en $old avant restauration"
+        terminate_db "$db"
+        psql_q -v a="$db" -v b="$old" <<< 'alter database :"a" rename to :"b"'
+    fi
+    log "création de la base $db"
+    as_pg createdb -O "$ODOO_DB_USER" -E UTF8 -T template0 "$db"
+    # pg_restore lit le flux pg_dump sur l'entrée standard
+    if ! as_pg pg_restore --no-owner --no-acl --role="$ODOO_DB_USER" -d "$db"; then
+        pg_failure_diag
+        die "pg_restore en erreur pour $db (base laissée en place pour diagnostic)"
+    fi
+    as_pg vacuumdb --analyze-only -d "$db" >/dev/null 2>&1 || true
+    log "base $db restaurée"
+    echo "{\"db\": $(json_str "$db"), \"status\": \"ok\"}"
+    ;;
+filestore-import)
+    valid_db "$1"
+    dest="$FILESTORE/$1"; replace="${2:-}"
+    if [[ -e "$dest" ]]; then
+        [[ "$replace" == "--replace" ]] || die "le filestore $dest existe déjà (remplacement non demandé)"
+        mv "$dest" "${dest}_avant_restauration_${TS}"
+        log "filestore $dest renommé avant restauration"
+    fi
+    install -d -o "$ODOO_USER" -g "$ODOO_USER" -m 750 "$dest"
+    tar -x -C "$dest" --no-same-owner -f -
+    chown -R "$ODOO_USER:$ODOO_USER" "$dest"
+    echo "{\"filestore\": $(json_str "$dest"), \"files\": $(find "$dest" -type f | wc -l)}"
+    ;;
+fs-import)
+    path="${1:-}"
+    owner=""
+    for entry in $IMPORT_PATHS; do
+        p="${entry%%:*}"; rest="${entry#*:}"
+        if [[ "$path" == "$p" ]]; then owner="$rest"; fi
+    done
+    [[ -n "$owner" ]] || die "chemin non autorisé pour fs-import : $path"
+    if [[ -e "$path" ]]; then
+        mv "$path" "${path}.avant_restauration_${TS}"
+        log "$path renommé avant restauration"
+    fi
+    install -d -m 750 "$path"
+    tar -x -C "$path" --no-same-owner -f -
+    chown -R "$owner" "$path"
+    echo "{\"path\": $(json_str "$path"), \"status\": \"ok\"}"
+    ;;
+neutralize)
+    valid_db "$1"
+    log "neutralisation de $1"
+    runuser -u "$ODOO_USER" -- "$ODOO_BIN" neutralize -c "$ODOO_CONF" -d "$1" >/dev/null
+    echo "{\"neutralized\": $(json_str "$1")}"
+    ;;
+pg-restore-cluster)
+    valid_ver "$1"; valid_cluster "$2"
+    ver="$1"; cluster="$2"; stanza="$3"; target="$4"
+    [[ "$stanza" =~ ^[a-z0-9_-]+$ ]] || die "stanza invalide"
+    datadir="/var/lib/postgresql/$ver/$cluster"
+    opts=("--stanza=$stanza")
+    if [[ "$target" == "latest" ]]; then
+        opts+=("--type=default")
+    else
+        [[ "$target" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}[+-][0-9]{4}$ ]] || die "horodatage invalide : $target"
+        opts+=("--type=time" "--target=${target/T/ }" "--target-action=promote")
+    fi
+    # Espace : l'ancien répertoire est conservé, il faut donc la place d'une 2e copie.
+    used=$(du -sb "$datadir" 2>/dev/null | cut -f1 || echo 0)
+    free=$(df -B1 --output=avail "$(dirname "$datadir")" | tail -1)
+    (( free > used * 11 / 10 )) || die "espace insuffisant pour conserver l'ancienne instance ($used o utilisés, $free o libres)"
+    log "restauration de l'instance $ver/$cluster ($target)"
+    systemctl stop "$ODOO_SERVICE" || true
+    systemctl stop "postgresql@$ver-$cluster" || true
+    old=""
+    if [[ -d "$datadir" ]] && [[ -n "$(ls -A "$datadir")" ]]; then
+        old="${datadir}.avant_restauration_${TS}"
+        mv "$datadir" "$old"
+    fi
+    install -d -o postgres -g postgres -m 700 "$datadir"
+    as_pg pgbackrest "${opts[@]}" restore
+    systemctl start "postgresql@$ver-$cluster"
+    deadline=$((SECONDS + RECOVERY_TIMEOUT))
+    until [[ "$(psql_q -c 'select pg_is_in_recovery()' 2>/dev/null)" == "f" ]]; do
+        (( SECONDS < deadline )) || die "délai de rejeu des WAL dépassé"
+        sleep 5
+    done
+    point=$(grep -h -E "recovery stopping|last completed transaction" "/var/log/postgresql/postgresql-$ver-$cluster.log" 2>/dev/null | tail -1 || true)
+    log "instance restaurée ; ancienne instance : ${old:-aucune}"
+    echo "{\"status\": \"ok\", \"old_datadir\": $(json_str "$old"), \"recovery_point\": $(json_str "$point")}"
+    ;;
+*)
+    die "verbe inconnu : $verb"
+    ;;
+esac
